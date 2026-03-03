@@ -270,6 +270,8 @@ class ChatWindow(QMainWindow):
         bubble.setFont(QFont("Segoe UI", 9))
         bubble.setTextFormat(Qt.PlainText)
         bubble.setMaximumWidth(270)
+        bubble.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        bubble.mouseReleaseEvent = lambda e: self._on_selection_changed(bubble)
 
         time_label = QLabel(timestamp)
         time_label.setFont(QFont("Segoe UI", 7))
@@ -390,6 +392,35 @@ class ChatWindow(QMainWindow):
         self._add_message(f"⚠️ {error}", is_user=False)
         self.input_field.setEnabled(True)
         self._worker = None
+
+    def _on_selection_changed(self, label: QLabel):
+        selected = label.selectedText()
+        if selected.strip():
+            QTimer.singleShot(100, lambda: self._show_selection_popup(selected, label))
+
+    def _show_selection_popup(self, selected_text: str, label: QLabel):
+        from PySide6.QtWidgets import QMenu
+        cursor_pos = label.mapToGlobal(label.rect().center())
+        
+        menu = QMenu()
+        menu.setStyleSheet("""
+            QMenu { background-color: #161b22; color: #e6edf3; border: 1px solid #4a9eff; border-radius: 6px; padding: 4px; }
+            QMenu::item { padding: 6px 20px; border-radius: 4px; }
+            QMenu::item:selected { background-color: #1f4f8f; }
+        """)
+        
+        ask_action = menu.addAction(f"💬  Bunu sor: \"{selected_text[:30]}...\"" if len(selected_text) > 30 else f"💬  Bunu sor: \"{selected_text}\"")
+        copy_action = menu.addAction("📋  Kopyala")
+        
+        ask_action.triggered.connect(lambda: self._ask_about_selection(selected_text))
+        copy_action.triggered.connect(lambda: QApplication.clipboard().setText(selected_text))
+        
+        menu.exec(cursor_pos)
+
+    def _ask_about_selection(self, selected_text: str):
+        self.input_field.setText(f"\"{selected_text}\" hakkında: ")
+        self.input_field.setFocus()
+        self.input_field.setCursorPosition(len(self.input_field.text()))
 
 class MapBackgroundWidget(QWidget):
 

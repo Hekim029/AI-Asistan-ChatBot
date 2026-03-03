@@ -9,10 +9,13 @@ class LLMClient:
             "Content-Type": "application/json"
         }
 
-    def send(self, messages: list[dict]) -> str:
+    def send(self, messages: list[dict], user_context: str = "") -> str:
+        system = SYSTEM_PROMPT
+        if user_context:
+            system += f"\n\n{user_context}"
         payload = {
             "model": MODEL,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+            "messages": [{"role": "system", "content": system}] + messages
         }
 
         try:

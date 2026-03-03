@@ -7,3 +7,4 @@ memory/history.json
 build/
 dist/
 *.spec
+memory/user_memory.json
