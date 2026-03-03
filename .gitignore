@@ -1,0 +1,9 @@
+venv/
+.env
+__pycache__/
+*.pyc
+memory/history.json
+*.exe
+build/
+dist/
+*.spec
