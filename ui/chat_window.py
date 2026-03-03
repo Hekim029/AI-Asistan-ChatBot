@@ -131,7 +131,7 @@ class ChatWindow(QMainWindow):
         icon.setFont(QFont("Segoe UI", 13))
         icon.setStyleSheet("color: #4a9eff;")
 
-        title = QLabel("AI Assistant")
+        title = QLabel("Heko")
         title.setFont(QFont("Segoe UI", 10, QFont.Bold))
         title.setStyleSheet("color: #e6edf3; margin-left: 8px;")
 
@@ -258,7 +258,7 @@ class ChatWindow(QMainWindow):
         return input_widget
 
     def _show_welcome(self):
-        self._add_message("Merhaba! Ben AI Assistant. Sana nasıl yardımcı olabilirim?", is_user=False)
+        self._add_message("Merhaba Ben Heko Sana Nasıl Yardımcı Olabilirim?", is_user=False)
 
     def _add_message(self, text: str, is_user: bool):
         timestamp = QDateTime.currentDateTime().toString("hh:mm")
