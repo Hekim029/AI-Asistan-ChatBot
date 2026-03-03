@@ -1,14 +1,12 @@
 import sys
 import keyboard
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QWidget, QMenu
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QPainter, QColor, QFont, QLinearGradient, QRadialGradient
 from ui.chat_window import ChatWindow
 
-
 class HotkeySignal(QObject):
     triggered = Signal()
-
 
 class FloatingButton(QWidget):
 
@@ -64,7 +62,6 @@ class FloatingButton(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.RightButton:
-            from PySide6.QtWidgets import QMenu
             menu = QMenu()
             menu.setStyleSheet("""
                 QMenu { background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 4px; }
@@ -113,7 +110,6 @@ class FloatingButton(QWidget):
         self._chat.move(x, y)
         self._chat.show()
 
-
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -123,7 +119,6 @@ def main():
     button.show()
 
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()

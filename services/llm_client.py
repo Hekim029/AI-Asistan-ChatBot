@@ -1,7 +1,6 @@
 import requests
 from utils.config import GROQ_API_KEY, MODEL, API_URL, SYSTEM_PROMPT
 
-
 class LLMClient:
 
     def __init__(self):
@@ -28,9 +27,3 @@ class LLMClient:
             return "⚠️ İnternet bağlantısı yok."
         except Exception as e:
             return f"⚠️ Beklenmedik hata: {e}"
-
-    def _inject_system_prompt(self, messages: list[dict]) -> list[dict]:
-        if not messages:
-            return messages
-        first = f"[Talimat: {SYSTEM_PROMPT}]\n\n{messages[0]['content']}"
-        return [{"role": "user", "content": first}] + messages[1:]

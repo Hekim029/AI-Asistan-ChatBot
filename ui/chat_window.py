@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication
+    QLineEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication, QMenu
 )
 from PySide6.QtCore import Qt, QDateTime, QTimer
 from PySide6.QtGui import QFont, QPainter, QColor, QPixmap
@@ -110,7 +110,6 @@ class ChatWindow(QMainWindow):
     def _setup_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -118,7 +117,6 @@ class ChatWindow(QMainWindow):
         main_layout.addWidget(self._build_header())
         main_layout.addWidget(self._build_divider())
         main_layout.addWidget(self._build_scroll_area(), stretch=1)
-        main_layout.addWidget(self._build_divider())
         main_layout.addWidget(self._build_input_area())
 
     def _build_header(self):
@@ -290,7 +288,6 @@ class ChatWindow(QMainWindow):
         ))
 
     def _show_message_menu(self, pos, text: str, widget: QWidget):
-        from PySide6.QtWidgets import QMenu
         menu = QMenu()
         menu.setStyleSheet("""
             QMenu { background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 4px; }
