@@ -123,7 +123,7 @@ class ChatWindow(QMainWindow):
         header_widget = QWidget()
         header_widget.setFixedHeight(52)
         header_widget.setStyleSheet("background-color: #161b22; border: none;")
-        
+
         layout = QHBoxLayout(header_widget)
         layout.setContentsMargins(16, 0, 16, 0)
 
@@ -138,6 +138,21 @@ class ChatWindow(QMainWindow):
         status = QLabel("● online")
         status.setFont(QFont("Segoe UI", 8))
         status.setStyleSheet("color: #3fb950; margin-left: 6px;")
+
+        clear_btn = QPushButton("⟳")
+        clear_btn.setFixedSize(28, 28)
+        clear_btn.setFont(QFont("Segoe UI", 12))
+        clear_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #8b949e;
+                border: none;
+                border-radius: 14px;
+            }
+            QPushButton:hover { background-color: #21262d; color: #4a9eff; }
+        """)
+        clear_btn.setToolTip("Konuşmayı temizle")
+        clear_btn.clicked.connect(self.clear_conversation)
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
@@ -157,9 +172,18 @@ class ChatWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(status)
         layout.addStretch()
+        layout.addWidget(clear_btn)
         layout.addWidget(close_btn)
 
         return header_widget
+
+    def clear_conversation(self):
+        self.router.context.clear()
+        while self._messages_layout.count() > 1:
+            item = self._messages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        QTimer.singleShot(300, self._show_welcome)
 
     def _build_divider(self):
         line = QFrame()

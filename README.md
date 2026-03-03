@@ -4,8 +4,10 @@ Windows'ta çalışan, ekranda sürüklenebilen, LLM destekli masaüstü AI asis
 
 ## Özellikler
 - Floating button — ekranın istediğin yerine taşıyabilirsin
-- Groq API ile hızlı LLM entegrasyonu
+- Groq API ile hızlı LLM entegrasyonu (Llama 3.3 70B)
 - Konuşma geçmişi (uygulama kapatılsa bile silinmez)
+- Konuşmayı temizle (buton veya "temizle" yaz)
+- Intent detection — saat, selamlama, vedalaşma yerel olarak işlenir
 - Global hotkey: `Ctrl+Shift+Space`
 - Mesaj kopyalama (sağ tık)
 - Uzay temalı arayüz
@@ -38,8 +40,27 @@ Windows'ta çalışan, ekranda sürüklenebilen, LLM destekli masaüstü AI asis
    python main.py
 ```
 
+## Proje Yapısı
+```
+ai-desktop-assistant/
+├── main.py              # Uygulama başlangıcı + FloatingButton
+├── ui/
+│   └── chat_window.py   # Arayüz
+├── core/
+│   ├── router.py        # Mesaj yönlendirme
+│   ├── intent_detector.py # Yerel intent tespiti
+│   └── worker.py        # Threading
+├── memory/
+│   └── context_manager.py # Konuşma geçmişi
+├── services/
+│   └── llm_client.py    # Groq API istemcisi
+└── utils/
+    └── config.py        # Ayarlar ve sistem promptu
+```
+
 ## Teknolojiler
 - Python 3.x
 - PySide6 (Qt for Python)
 - Groq API (Llama 3.3 70B)
 - keyboard
+- python-dotenv
