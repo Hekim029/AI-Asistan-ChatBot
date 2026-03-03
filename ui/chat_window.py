@@ -68,7 +68,6 @@ WORLD_MAP_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 580"
   </g>
 </svg>"""
 
-
 class ChatWindow(QMainWindow):
 
     def __init__(self):
@@ -391,7 +390,6 @@ class ChatWindow(QMainWindow):
         self._add_message(f"⚠️ {error}", is_user=False)
         self.input_field.setEnabled(True)
         self._worker = None
-
 
 class MapBackgroundWidget(QWidget):
 

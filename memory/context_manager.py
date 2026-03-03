@@ -1,7 +1,6 @@
 import json
 import os
 
-
 class ContextManager:
 
     def __init__(self, max_messages: int = 20, save_path: str = "memory/history.json"):
