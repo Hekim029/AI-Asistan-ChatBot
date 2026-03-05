@@ -3,15 +3,18 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication, QMenu
 )
 from PySide6.QtCore import Qt, QDateTime, QTimer
-from PySide6.QtGui import QFont, QPainter, QColor, QPixmap
+from PySide6.QtGui import QFont, QPainter, QColor, QPixmap, QPainterPath
 from core.router import Router
 from core.worker import ResponseWorker
+from ui.settings_window import SettingsWindow
+from core.daily_motivation import get_today_motivation
 
 class ChatWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
         self.router = Router()
+        self._settings = SettingsWindow()
         self._drag_pos = None
         self._typing_dots = 0
         self._typing_timer = QTimer()
@@ -20,12 +23,13 @@ class ChatWindow(QMainWindow):
         self._typing_wrapper = None
         self._worker = None
         self._is_online = True
+        self._on_response_callback = None
         self._setup_window()
         self._setup_ui()
         QTimer.singleShot(500, self._show_welcome)
 
     def _setup_window(self):
-        self.setWindowTitle("AI Assistant")
+        self.setWindowTitle("Heko")
         self.setFixedSize(404, 584)
         self.setStyleSheet("background-color: transparent;")
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -34,7 +38,7 @@ class ChatWindow(QMainWindow):
     def closeEvent(self, event):
         event.ignore()
         self.hide()
-    
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -46,6 +50,17 @@ class ChatWindow(QMainWindow):
 
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width(), self.height(), 12, 12)
+        painter.setClipPath(path)
+        painter.fillPath(path, QColor("#111318"))
+        painter.setPen(QColor("#000000"))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
 
     def _setup_ui(self):
         central_widget = QWidget()
@@ -100,6 +115,28 @@ class ChatWindow(QMainWindow):
         """)
         self._status_btn.clicked.connect(self._toggle_online)
 
+        self._search_btn = QPushButton("🔍")
+        self._search_btn.setFixedSize(28, 28)
+        self._search_btn.setFont(QFont("Segoe UI", 11))
+        self._search_btn.setCheckable(True)
+        self._search_btn.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
+            QPushButton:hover { background-color: #21262d; color: #4a9eff; }
+            QPushButton:checked { color: #4a9eff; }
+        """)
+        self._search_btn.setToolTip("Mesaj ara")
+        self._search_btn.clicked.connect(self._toggle_search)
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setFixedSize(28, 28)
+        settings_btn.setFont(QFont("Segoe UI", 11))
+        settings_btn.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
+            QPushButton:hover { background-color: #21262d; color: #4a9eff; }
+        """)
+        settings_btn.setToolTip("Ayarlar")
+        settings_btn.clicked.connect(self._open_settings)
+
         clear_btn = QPushButton("⟳")
         clear_btn.setFixedSize(28, 28)
         clear_btn.setFont(QFont("Segoe UI", 12))
@@ -133,10 +170,17 @@ class ChatWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(self._status_btn)
         layout.addStretch()
+        layout.addWidget(self._search_btn)
+        layout.addWidget(settings_btn)
         layout.addWidget(clear_btn)
         layout.addWidget(close_btn)
 
         return header_widget
+
+    def _open_settings(self):
+        pos = self.frameGeometry().topLeft()
+        self._settings.move(pos.x() + 10, pos.y() + 60)
+        self._settings.show()
 
     def clear_conversation(self):
         self.router.context.clear()
@@ -175,12 +219,31 @@ class ChatWindow(QMainWindow):
 
     def _build_input_area(self):
         input_widget = QWidget()
-        input_widget.setFixedHeight(62)
         input_widget.setStyleSheet("background-color: #161b22; border: none;")
 
-        layout = QHBoxLayout(input_widget)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(input_widget)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+
+        self._search_bar = QLineEdit()
+        self._search_bar.setPlaceholderText("Mesajlarda ara...")
+        self._search_bar.setFont(QFont("Segoe UI", 9))
+        self._search_bar.setFixedHeight(30)
+        self._search_bar.setVisible(False)
+        self._search_bar.setStyleSheet("""
+            QLineEdit {
+                background-color: #0d1117;
+                color: #e6edf3;
+                border: 1px solid #4a9eff;
+                border-radius: 14px;
+                padding: 0px 12px;
+            }
+        """)
+        self._search_bar.textChanged.connect(self._search_messages)
+
+        send_layout = QHBoxLayout()
+        send_layout.setSpacing(8)
+        send_layout.setContentsMargins(0, 0, 0, 0)
 
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Mesaj yaz...")
@@ -213,13 +276,60 @@ class ChatWindow(QMainWindow):
         """)
         send_btn.clicked.connect(self._send_message)
 
-        layout.addWidget(self.input_field)
-        layout.addWidget(send_btn)
+        send_layout.addWidget(self.input_field)
+        send_layout.addWidget(send_btn)
+
+        layout.addWidget(self._search_bar)
+        layout.addLayout(send_layout)
 
         return input_widget
 
     def _show_welcome(self):
         self._add_message("Merhaba Ben Heko Sana Nasıl Yardımcı Olabilirim?", is_user=False)
+        motivation = get_today_motivation()
+        if motivation:
+            QTimer.singleShot(1000, lambda: self._add_message(motivation, is_user=False))
+
+    def _toggle_online(self):
+        self._is_online = self._status_btn.isChecked()
+        if self._is_online:
+            self._status_btn.setText("● online")
+            motivation = get_today_motivation()
+            msg = "Uyandım! Sana yardımcı olmaya hazırım. 👋"
+            if motivation:
+                msg += f"\n\n{motivation}"
+            self._add_message(msg, is_user=False)
+        else:
+            self._status_btn.setText("● offline")
+            self._add_message("Uyuyorum... Uyandırmak için online yap. 💤", is_user=False)
+
+    def _toggle_search(self):
+        is_active = self._search_btn.isChecked()
+        self._search_bar.setVisible(is_active)
+        if is_active:
+            self._search_bar.setFocus()
+        else:
+            self._search_bar.clear()
+            self._search_messages("")
+
+    def _search_messages(self, query: str):
+        query = query.lower().strip()
+        for i in range(self._messages_layout.count() - 1):
+            item = self._messages_layout.itemAt(i)
+            if not item or not item.widget():
+                continue
+            wrapper = item.widget()
+            bubble = None
+            for child in wrapper.findChildren(QLabel):
+                if child.styleSheet() and "border-radius" in child.styleSheet():
+                    bubble = child
+                    break
+            if not bubble:
+                continue
+            if not query:
+                wrapper.setVisible(True)
+            else:
+                wrapper.setVisible(query in bubble.text().lower())
 
     def _add_message(self, text: str, is_user: bool):
         timestamp = QDateTime.currentDateTime().toString("hh:mm")
@@ -353,6 +463,8 @@ class ChatWindow(QMainWindow):
         self.input_field.setEnabled(True)
         self.input_field.setFocus()
         self._worker = None
+        if self._on_response_callback:
+            self._on_response_callback()
 
     def _on_error(self, error: str):
         self._hide_typing_indicator()
@@ -385,7 +497,7 @@ class ChatWindow(QMainWindow):
             QMenu::item:selected { background-color: #1f4f8f; }
         """)
 
-        ask_action = menu.addAction(f"💬  Bunu sor")
+        ask_action = menu.addAction("💬  Bunu sor")
         ask_action.triggered.connect(lambda: self._ask_about_selection(selected_text))
 
         cursor_pos = label.mapToGlobal(label.rect().center())
@@ -396,22 +508,6 @@ class ChatWindow(QMainWindow):
         self.input_field.setFocus()
         self.input_field.setCursorPosition(len(self.input_field.text()))
 
-    def _toggle_online(self):
-        self._is_online = self._status_btn.isChecked()
-        if self._is_online:
-            self._status_btn.setText("● online")
-            self._add_message("Uyandım! Sana yardımcı olmaya hazırım. 👋", is_user=False)
-        else:
-            self._status_btn.setText("● offline")
-            self._add_message("Uyuyorum... Uyandırmak için online yap. 💤", is_user=False)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QColor("#000000"))
-        from PySide6.QtCore import QRect
-        painter.drawRoundedRect(QRect(1, 1, self.width()-2, self.height()-2), 12, 12)
 
 class MapBackgroundWidget(QWidget):
 

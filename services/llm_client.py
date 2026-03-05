@@ -1,25 +1,27 @@
 import requests
-from utils.config import GROQ_API_KEY, MODEL, API_URL, SYSTEM_PROMPT
+import utils.config as config
 
 class LLMClient:
 
     def __init__(self):
         self._headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Authorization": f"Bearer {config.GROQ_API_KEY}",
             "Content-Type": "application/json"
         }
 
     def send(self, messages: list[dict], user_context: str = "") -> str:
-        system = SYSTEM_PROMPT
+        print(f"KULLANILAN PROMPT: {config.SYSTEM_PROMPT[:50]}")
+        system = config.SYSTEM_PROMPT
         if user_context:
             system += f"\n\n{user_context}"
+
         payload = {
-            "model": MODEL,
+            "model": config.MODEL,
             "messages": [{"role": "system", "content": system}] + messages
         }
 
         try:
-            response = requests.post(API_URL, headers=self._headers, json=payload)
+            response = requests.post(config.API_URL, headers=self._headers, json=payload)
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
         except requests.exceptions.HTTPError as e:

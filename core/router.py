@@ -3,7 +3,7 @@ from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
 from services.llm_client import LLMClient
 from core.intent_detector import IntentDetector
-
+import utils.config as config
 
 class Router:
 

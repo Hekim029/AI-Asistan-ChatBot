@@ -1,7 +1,7 @@
 import sys
 import keyboard
 from PySide6.QtWidgets import QApplication, QWidget, QMenu
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import QTimer, Qt, Signal, QObject
 from PySide6.QtGui import QPainter, QColor, QFont, QLinearGradient, QRadialGradient
 from ui.chat_window import ChatWindow
 
@@ -12,12 +12,36 @@ class FloatingButton(QWidget):
 
     def __init__(self, chat_window: ChatWindow):
         super().__init__()
+        self._flash_timer = QTimer()
+        self._flash_timer.timeout.connect(self._flash_step)
+        self._flash_count = 0
+        self._is_flashing = False
         self._chat = chat_window
         self._drag_pos = None
         self._drag_moved = False
         self._hotkey_signal = HotkeySignal()
         self._hotkey_signal.triggered.connect(self._toggle_chat)
         self._setup()
+
+    def start_flash(self):
+        if self._is_flashing:
+            return
+        self._is_flashing = True
+        self._flash_count = 0
+        self._flash_timer.start(150)
+
+    def stop_flash(self):
+        self._flash_timer.stop()
+        self._is_flashing = False
+        self._flash_count = 0
+        self.update()
+
+    def _flash_step(self):
+        self._flash_count += 1
+        if self._flash_count > 12:
+            self.stop_flash()
+            return
+        self.update()
 
     def _setup(self):
         self.setFixedSize(64, 64)
@@ -45,9 +69,14 @@ class FloatingButton(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(0, 0, 64, 64)
 
+        if self._is_flashing and self._flash_count % 2 == 0:
+            c1, c2 = QColor("#00ff88"), QColor("#00aa55")
+        else:
+            c1, c2 = QColor("#1a6fd4"), QColor("#0a3d7a")
+
         gradient = QLinearGradient(8, 8, 56, 56)
-        gradient.setColorAt(0, QColor("#1a6fd4"))
-        gradient.setColorAt(1, QColor("#0a3d7a"))
+        gradient.setColorAt(0, c1)
+        gradient.setColorAt(1, c2)
         painter.setBrush(gradient)
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(8, 8, 48, 48)
@@ -116,6 +145,7 @@ def main():
 
     chat = ChatWindow()
     button = FloatingButton(chat)
+    chat._on_response_callback = button.start_flash
     button.show()
 
     sys.exit(app.exec())

@@ -8,3 +8,4 @@ build/
 dist/
 *.spec
 memory/user_memory.json
+memory/daily_motivation.json
