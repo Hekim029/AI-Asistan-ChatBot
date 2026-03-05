@@ -513,7 +513,7 @@ class MapBackgroundWidget(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._pixmap = QPixmap("assets/arka_plan_3.jpg")
+        self._pixmap = QPixmap("assets/arka_plan_6.jpg")
 
     def paintEvent(self, event):
         painter = QPainter(self)
