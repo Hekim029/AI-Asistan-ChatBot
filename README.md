@@ -1,10 +1,6 @@
 # 🚀 Heko — AI Desktop Assistant
 
 <p align="center">
-  <img src="assets/arka_plan_3.jpg" width="300" style="border-radius: 12px;" />
-</p>
-
-<p align="center">
   <b>Masaüstünde yaşayan, konuşan, düşünen kişisel asistan.</b><br/>
   Groq API ile güçlendirilmiş, PySide6 ile inşa edilmiştir.
 </p>
