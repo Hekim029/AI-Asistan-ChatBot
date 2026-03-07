@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication, QMenu
@@ -8,6 +9,7 @@ from core.router import Router
 from core.worker import ResponseWorker
 from ui.settings_window import SettingsWindow
 from core.daily_motivation import get_today_motivation
+
 
 class ChatWindow(QMainWindow):
 
@@ -513,7 +515,7 @@ class MapBackgroundWidget(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._pixmap = QPixmap("assets/arka_plan_6.jpg")
+        self._pixmap = QPixmap("assets/arka_plan_3.jpg")
 
     def paintEvent(self, event):
         painter = QPainter(self)
