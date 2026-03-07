@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication, QMenu
@@ -7,7 +6,9 @@ from PySide6.QtCore import Qt, QDateTime, QTimer
 from PySide6.QtGui import QFont, QPainter, QColor, QPixmap, QPainterPath
 from core.router import Router
 from core.worker import ResponseWorker
+import utils.config as config
 from ui.settings_window import SettingsWindow
+from ui.history_window import HistoryWindow
 from core.daily_motivation import get_today_motivation
 
 
@@ -21,11 +22,13 @@ class ChatWindow(QMainWindow):
         self._typing_dots = 0
         self._typing_timer = QTimer()
         self._typing_timer.timeout.connect(self._animate_typing)
+        self._settings.saved.connect(self._apply_accent)
         self._typing_label = None
         self._typing_wrapper = None
         self._worker = None
         self._is_online = True
         self._on_response_callback = None
+        self._history = HistoryWindow(self.router.context)
         self._setup_window()
         self._setup_ui()
         QTimer.singleShot(500, self._show_welcome)
@@ -85,9 +88,9 @@ class ChatWindow(QMainWindow):
         layout = QHBoxLayout(header_widget)
         layout.setContentsMargins(16, 0, 16, 0)
 
-        icon = QLabel("◈")
-        icon.setFont(QFont("Segoe UI", 13))
-        icon.setStyleSheet("color: #4a9eff;")
+        self._icon_label = QLabel("◈")
+        self._icon_label.setFont(QFont("Segoe UI", 13))
+        self._icon_label.setStyleSheet(f"color: {config.ACCENT_COLOR};")
 
         title = QLabel("AI Assistant")
         title.setFont(QFont("Segoe UI", 10, QFont.Bold))
@@ -98,33 +101,30 @@ class ChatWindow(QMainWindow):
         self._status_btn.setCheckable(True)
         self._status_btn.setChecked(True)
         self._status_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #3fb950;
-                border: 1px solid #3fb950;
-                border-radius: 8px;
-                padding: 2px 8px;
-            }
-            QPushButton:checked {
-                background-color: transparent;
-                color: #3fb950;
-                border: 1px solid #3fb950;
-            }
-            QPushButton:!checked {
-                color: #8b949e;
-                border: 1px solid #8b949e;
-            }
+            QPushButton { background-color: transparent; color: #3fb950; border: 1px solid #3fb950; border-radius: 8px; padding: 2px 8px; }
+            QPushButton:checked { background-color: transparent; color: #3fb950; border: 1px solid #3fb950; }
+            QPushButton:!checked { color: #8b949e; border: 1px solid #8b949e; }
         """)
         self._status_btn.clicked.connect(self._toggle_online)
+
+        history_btn = QPushButton("📜")
+        history_btn.setFixedSize(28, 28)
+        history_btn.setFont(QFont("Segoe UI", 11))
+        history_btn.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
+            QPushButton:hover { background-color: #21262d; color: #8b949e; }
+        """)
+        history_btn.setToolTip("Konuşma geçmişi")
+        history_btn.clicked.connect(self._open_history)
 
         self._search_btn = QPushButton("🔍")
         self._search_btn.setFixedSize(28, 28)
         self._search_btn.setFont(QFont("Segoe UI", 11))
         self._search_btn.setCheckable(True)
-        self._search_btn.setStyleSheet("""
-            QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
-            QPushButton:hover { background-color: #21262d; color: #4a9eff; }
-            QPushButton:checked { color: #4a9eff; }
+        self._search_btn.setStyleSheet(f"""
+            QPushButton {{ background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }}
+            QPushButton:hover {{ background-color: #21262d; color: {config.ACCENT_COLOR}; }}
+            QPushButton:checked {{ color: {config.ACCENT_COLOR}; }}
         """)
         self._search_btn.setToolTip("Mesaj ara")
         self._search_btn.clicked.connect(self._toggle_search)
@@ -134,7 +134,7 @@ class ChatWindow(QMainWindow):
         settings_btn.setFont(QFont("Segoe UI", 11))
         settings_btn.setStyleSheet("""
             QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
-            QPushButton:hover { background-color: #21262d; color: #4a9eff; }
+            QPushButton:hover { background-color: #21262d; color: #8b949e; }
         """)
         settings_btn.setToolTip("Ayarlar")
         settings_btn.clicked.connect(self._open_settings)
@@ -143,13 +143,8 @@ class ChatWindow(QMainWindow):
         clear_btn.setFixedSize(28, 28)
         clear_btn.setFont(QFont("Segoe UI", 12))
         clear_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #8b949e;
-                border: none;
-                border-radius: 14px;
-            }
-            QPushButton:hover { background-color: #21262d; color: #4a9eff; }
+            QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
+            QPushButton:hover { background-color: #21262d; color: #8b949e; }
         """)
         clear_btn.setToolTip("Konuşmayı temizle")
         clear_btn.clicked.connect(self.clear_conversation)
@@ -158,20 +153,16 @@ class ChatWindow(QMainWindow):
         close_btn.setFixedSize(28, 28)
         close_btn.setFont(QFont("Segoe UI", 10))
         close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #8b949e;
-                border: none;
-                border-radius: 14px;
-            }
+            QPushButton { background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }
             QPushButton:hover { background-color: #e74c3c; color: #ffffff; }
         """)
         close_btn.clicked.connect(self.hide)
 
-        layout.addWidget(icon)
+        layout.addWidget(self._icon_label)
         layout.addWidget(title)
         layout.addWidget(self._status_btn)
         layout.addStretch()
+        layout.addWidget(history_btn)
         layout.addWidget(self._search_btn)
         layout.addWidget(settings_btn)
         layout.addWidget(clear_btn)
@@ -232,14 +223,14 @@ class ChatWindow(QMainWindow):
         self._search_bar.setFont(QFont("Segoe UI", 9))
         self._search_bar.setFixedHeight(30)
         self._search_bar.setVisible(False)
-        self._search_bar.setStyleSheet("""
-            QLineEdit {
+        self._search_bar.setStyleSheet(f"""
+            QLineEdit {{
                 background-color: #0d1117;
                 color: #e6edf3;
-                border: 1px solid #4a9eff;
+                border: 1px solid {config.ACCENT_COLOR};
                 border-radius: 14px;
                 padding: 0px 12px;
-            }
+            }}
         """)
         self._search_bar.textChanged.connect(self._search_messages)
 
@@ -251,35 +242,35 @@ class ChatWindow(QMainWindow):
         self.input_field.setPlaceholderText("Mesaj yaz...")
         self.input_field.setFont(QFont("Segoe UI", 10))
         self.input_field.setFixedHeight(38)
-        self.input_field.setStyleSheet("""
-            QLineEdit {
+        self.input_field.setStyleSheet(f"""
+            QLineEdit {{
                 background-color: #21262d;
                 color: #e6edf3;
                 border: 1px solid #30363d;
                 border-radius: 18px;
                 padding: 0px 14px;
-            }
-            QLineEdit:focus { border: 1px solid #4a9eff; }
+            }}
+            QLineEdit:focus {{ border: 1px solid {config.ACCENT_COLOR}; }}
         """)
         self.input_field.returnPressed.connect(self._send_message)
 
-        send_btn = QPushButton("↑")
-        send_btn.setFixedSize(38, 38)
-        send_btn.setFont(QFont("Arial", 13))
-        send_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4a9eff;
+        self._send_btn = QPushButton("↑")
+        self._send_btn.setFixedSize(38, 38)
+        self._send_btn.setFont(QFont("Arial", 13))
+        self._send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {config.ACCENT_COLOR};
                 color: #ffffff;
                 border: none;
                 border-radius: 19px;
-            }
-            QPushButton:hover { background-color: #6ab0ff; }
-            QPushButton:pressed { background-color: #3080df; }
+            }}
+            QPushButton:hover {{ background-color: {config.ACCENT_COLOR}cc; }}
+            QPushButton:pressed {{ background-color: {config.ACCENT_COLOR}99; }}
         """)
-        send_btn.clicked.connect(self._send_message)
+        self._send_btn.clicked.connect(self._send_message)
 
         send_layout.addWidget(self.input_field)
-        send_layout.addWidget(send_btn)
+        send_layout.addWidget(self._send_btn)
 
         layout.addWidget(self._search_bar)
         layout.addLayout(send_layout)
@@ -353,8 +344,8 @@ class ChatWindow(QMainWindow):
         time_label.setAlignment(Qt.AlignBottom)
 
         if is_user:
-            bubble.setStyleSheet("""
-                background-color: #1f4f8f;
+            bubble.setStyleSheet(f"""
+                background-color: {config.ACCENT_COLOR};
                 color: #e6edf3;
                 border-radius: 14px;
                 border-bottom-right-radius: 3px;
@@ -364,8 +355,8 @@ class ChatWindow(QMainWindow):
             outer.addWidget(time_label)
             outer.addWidget(bubble)
         else:
-            bubble.setStyleSheet("""
-                background-color: #1e242c;
+            bubble.setStyleSheet(f"""
+                background-color: {config.AI_COLOR};
                 color: #e6edf3;
                 border-radius: 14px;
                 border-bottom-left-radius: 3px;
@@ -484,19 +475,19 @@ class ChatWindow(QMainWindow):
             return
 
         menu = QMenu()
-        menu.setStyleSheet("""
-            QMenu {
+        menu.setStyleSheet(f"""
+            QMenu {{
                 background-color: #1e242c;
                 color: #e6edf3;
-                border: 1px solid #4a9eff;
+                border: 1px solid {config.ACCENT_COLOR};
                 border-radius: 12px;
                 padding: 2px;
-            }
-            QMenu::item {
+            }}
+            QMenu::item {{
                 padding: 4px 8px;
                 border-radius: 12px;
-            }
-            QMenu::item:selected { background-color: #1f4f8f; }
+            }}
+            QMenu::item:selected {{ background-color: {config.ACCENT_COLOR}55; }}
         """)
 
         ask_action = menu.addAction("💬  Bunu sor")
@@ -510,6 +501,79 @@ class ChatWindow(QMainWindow):
         self.input_field.setFocus()
         self.input_field.setCursorPosition(len(self.input_field.text()))
 
+    def _apply_accent(self):
+        color = config.ACCENT_COLOR
+        ai_color = config.AI_COLOR
+
+        self._icon_label.setStyleSheet(f"color: {color};")
+
+        self._search_btn.setStyleSheet(f"""
+            QPushButton {{ background-color: transparent; color: #8b949e; border: none; border-radius: 14px; }}
+            QPushButton:hover {{ background-color: #21262d; color: {color}; }}
+            QPushButton:checked {{ color: {color}; }}
+        """)
+
+        self._search_bar.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: #0d1117;
+                color: #e6edf3;
+                border: 1px solid {color};
+                border-radius: 14px;
+                padding: 0px 12px;
+            }}
+        """)
+
+        self.input_field.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: #21262d;
+                color: #e6edf3;
+                border: 1px solid #30363d;
+                border-radius: 18px;
+                padding: 0px 14px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {color}; }}
+        """)
+
+        self._send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color};
+                color: #ffffff;
+                border: none;
+                border-radius: 19px;
+            }}
+            QPushButton:hover {{ background-color: {color}cc; }}
+            QPushButton:pressed {{ background-color: {color}99; }}
+        """)
+
+        for i in range(self._messages_layout.count() - 1):
+            item = self._messages_layout.itemAt(i)
+            if not item or not item.widget():
+                continue
+            for child in item.widget().findChildren(QLabel):
+                style = child.styleSheet()
+                if not style:
+                    continue
+                if "border-bottom-right-radius: 3px" in style:
+                    child.setStyleSheet(f"""
+                        background-color: {color};
+                        color: #e6edf3;
+                        border-radius: 14px;
+                        border-bottom-right-radius: 3px;
+                        padding: 10px 14px;
+                    """)
+                elif "border-bottom-left-radius: 3px" in style:
+                    child.setStyleSheet(f"""
+                        background-color: {ai_color};
+                        color: #e6edf3;
+                        border-radius: 14px;
+                        border-bottom-left-radius: 3px;
+                        padding: 10px 14px;
+                    """)
+
+    def _open_history(self):
+        pos = self.frameGeometry().topLeft()
+        self._history.move(pos.x() + 10, pos.y() + 60)
+        self._history.show()
 
 class MapBackgroundWidget(QWidget):
 

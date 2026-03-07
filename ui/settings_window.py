@@ -2,9 +2,61 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QLineEdit
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPainterPath
 import utils.config as config
+
+COLOR_PAIRS = [
+    ("#4a9eff", "#1e242c", "Okyanus"),
+    ("#9b59b6", "#2d1b4e", "Gece"),
+    ("#3fb950", "#1a3d20", "Orman"),
+    ("#f0883e", "#4a2a0e", "Gün Batimi"),
+    ("#e74c3c", "#4a1010", "Kirmizi"),
+    ("#ff6eb4", "#4a1a35", "Pembe"),
+    ("#00d4ff", "#003a4a", "Buz"),
+]
+
+class SplitColorButton(QWidget):
+    pair_selected = Signal(str, str)
+
+    def __init__(self, user_color: str, ai_color: str, name: str):
+        super().__init__()
+        self.user_color = user_color
+        self.ai_color = ai_color
+        self.name = name
+        self.is_selected = False
+        self.setFixedSize(38, 38)
+        self.setToolTip(name)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        left_path = QPainterPath()
+        left_path.moveTo(19, 3)
+        left_path.arcTo(3, 3, 32, 32, 90, 180)
+        left_path.closeSubpath()
+        painter.fillPath(left_path, QColor(self.user_color))
+
+        right_path = QPainterPath()
+        right_path.moveTo(19, 3)
+        right_path.arcTo(3, 3, 32, 32, 90, -180)
+        right_path.closeSubpath()
+        painter.fillPath(right_path, QColor(self.ai_color))
+
+        painter.setPen(QColor("#161b22"))
+        painter.drawLine(19, 3, 19, 35)
+
+        if self.is_selected:
+            painter.setPen(QColor("#ffffff"))
+        else:
+            painter.setPen(QColor("#30363d"))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QRectF(2, 2, 34, 34))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.pair_selected.emit(self.user_color, self.ai_color)
 
 class SettingsWindow(QWidget):
 
@@ -17,7 +69,7 @@ class SettingsWindow(QWidget):
         self._setup_ui()
 
     def _setup_window(self):
-        self.setFixedSize(380, 480)
+        self.setFixedSize(380, 500)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -139,26 +191,23 @@ class SettingsWindow(QWidget):
             }
             QTextEdit:focus { border: 1px solid #4a9eff; }
         """)
-        self._prompt_edit.setFixedHeight(200)
+        self._prompt_edit.setFixedHeight(160)
 
-        name_label = QLabel("✏️  Asistan Adı (header'da görünür)")
-        name_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        name_label.setStyleSheet("color: #8b949e;")
+        color_label = QLabel("🎨  Tema Seç  —  ◑  Sol: Sen  |  Sağ: AI")
+        color_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        color_label.setStyleSheet("color: #8b949e;")
 
-        self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("Heko")
-        self._name_edit.setFont(QFont("Segoe UI", 9))
-        self._name_edit.setFixedHeight(36)
-        self._name_edit.setStyleSheet("""
-            QLineEdit {
-                background-color: #0d1117;
-                color: #e6edf3;
-                border: 1px solid #30363d;
-                border-radius: 8px;
-                padding: 0px 10px;
-            }
-            QLineEdit:focus { border: 1px solid #4a9eff; }
-        """)
+        color_layout = QHBoxLayout()
+        color_layout.setSpacing(8)
+
+        self._split_buttons = []
+        for user_color, ai_color, name in COLOR_PAIRS:
+            btn = SplitColorButton(user_color, ai_color, name)
+            btn.pair_selected.connect(self._select_pair)
+            color_layout.addWidget(btn)
+            self._split_buttons.append(btn)
+
+        color_layout.addStretch()
 
         save_btn = QPushButton("💾  Kaydet")
         save_btn.setFixedHeight(38)
@@ -178,15 +227,21 @@ class SettingsWindow(QWidget):
         content.addLayout(mode_layout)
         content.addWidget(prompt_label)
         content.addWidget(self._prompt_edit)
-        content.addWidget(name_label)
-        content.addWidget(self._name_edit)
+        content.addWidget(color_label)
+        content.addLayout(color_layout)
         content.addStretch()
         content.addWidget(save_btn)
 
         return content
 
+    def _select_pair(self, user_color: str, ai_color: str):
+        config.ACCENT_COLOR = user_color
+        config.AI_COLOR = ai_color
+        for btn in self._split_buttons:
+            btn.is_selected = (btn.user_color == user_color and btn.ai_color == ai_color)
+            btn.update()
+
     def _save(self):
         config.SYSTEM_PROMPT = self._prompt_edit.toPlainText().strip()
-        print(f"KAYDEDILDI: {config.SYSTEM_PROMPT[:80]}")
         self.saved.emit()
         self.hide()

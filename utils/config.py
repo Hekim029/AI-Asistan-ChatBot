@@ -33,4 +33,7 @@ Teknik terimleri doğru kullanırsın.
 Türkçe sorulara Türkçe, İngilizce sorulara İngilizce cevap verirsin.""",
 }
 
+ACCENT_COLOR = "#4a9eff"
+AI_COLOR = "#1e242c"
+
 SYSTEM_PROMPT = MODES["normal"]

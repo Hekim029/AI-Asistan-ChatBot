@@ -10,7 +10,6 @@ class LLMClient:
         }
 
     def send(self, messages: list[dict], user_context: str = "") -> str:
-        print(f"KULLANILAN PROMPT: {config.SYSTEM_PROMPT[:50]}")
         system = config.SYSTEM_PROMPT
         if user_context:
             system += f"\n\n{user_context}"
