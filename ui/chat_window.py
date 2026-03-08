@@ -337,6 +337,7 @@ class ChatWindow(QMainWindow):
         bubble.setMaximumWidth(290)
         bubble.setTextInteractionFlags(Qt.TextSelectableByMouse)
         bubble.mouseReleaseEvent = lambda e: self._on_selection_changed(bubble)
+        bubble.setTextFormat(Qt.MarkdownText)
 
         time_label = QLabel(timestamp)
         time_label.setFont(QFont("Segoe UI", 8, QFont.Bold))

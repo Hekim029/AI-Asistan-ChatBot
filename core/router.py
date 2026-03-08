@@ -1,10 +1,14 @@
 from datetime import datetime
+from email.mime import message
 from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
 from services.llm_client import LLMClient
 from services.calendar_reader import get_upcoming_events, format_events_response
 from core.intent_detector import IntentDetector
 import utils.config as config
+from services.web_controller import handle_web_command
+from services.system_info import get_system_status
+from services.app_launcher import launch_app
 
 class Router:
 
@@ -18,10 +22,28 @@ class Router:
         self.context.add_message("user", message)
         intent = self.detector.detect(message)
 
+        message_lower = message.lower().strip()
+
         if intent == "time":
             response = self._get_time()
         elif intent == "greeting":
             response = "Merhaba! Sana nasıl yardımcı olabilirim?"
+        elif intent == "system":
+            response = get_system_status()
+        elif intent == "app_launch" or intent == "web":
+            if "spotify" in message_lower:
+                response = self._get_web(message)
+                if response:
+                    self.context.add_message("assistant", response)
+                    return response
+            target = message_lower
+            for word in ["aç", "başlat", "çalıştır", "open", "lütfen", "uygulamasını"]:
+                target = target.replace(word, "")
+            target = target.strip()
+            
+            response = launch_app(target)
+            if response is None:
+                response = self._get_web(message)
         elif intent == "farewell":
             response = "Görüşürüz! İyi günler."
         elif intent == "clear":
@@ -33,6 +55,8 @@ class Router:
             response = f"✅ Kaydettim: {memory_text}"
         elif intent == "calendar":
             response = self._get_calendar(message)
+        elif intent == "web":
+            response = self._get_web(message)
         else:
             response = self.llm.send(self.context.get_history(), self.user_memory.formatted())
 
@@ -48,6 +72,12 @@ class Router:
                 idx = message.lower().index(trigger) + len(trigger)
                 return message[idx:].strip()
         return message.strip()
+    
+    def _get_web(self, message: str) -> str:
+        result = handle_web_command(message)
+        if result:
+            return result
+        return "🌐 Hangi siteyi veya aramayı yapmamı istersin?"
     
 
     def _get_calendar(self, message: str) -> str:
