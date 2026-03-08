@@ -2,6 +2,7 @@ from datetime import datetime
 from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
 from services.llm_client import LLMClient
+from services.calendar_reader import get_upcoming_events, format_events_response
 from core.intent_detector import IntentDetector
 import utils.config as config
 
@@ -30,6 +31,8 @@ class Router:
             memory_text = self._extract_memory(message)
             self.user_memory.add(memory_text)
             response = f"✅ Kaydettim: {memory_text}"
+        elif intent == "calendar":
+            response = self._get_calendar(message)
         else:
             response = self.llm.send(self.context.get_history(), self.user_memory.formatted())
 
@@ -45,3 +48,52 @@ class Router:
                 idx = message.lower().index(trigger) + len(trigger)
                 return message[idx:].strip()
         return message.strip()
+    
+
+    def _get_calendar(self, message: str) -> str:
+        try:
+            events = get_upcoming_events(days=365)
+            if not events:
+                return "📅 Takviminde önümüzdeki 365 gün içinde etkinlik bulamadım."
+
+            msg = message.lower()
+
+            if "bugün" in msg:
+                filtered = [e for e in events if e["days_left"] == 0]
+                if not filtered:
+                    return "📅 Bugün için takviminde etkinlik yok."
+                lines = ["📅 Bugünkü etkinlikler:"]
+                for e in filtered:
+                    lines.append(f"  • {e['title']}")
+                return "\n".join(lines)
+
+            elif "yarın" in msg:
+                filtered = [e for e in events if e["days_left"] == 1]
+                if not filtered:
+                    return "📅 Yarın için takviminde etkinlik yok."
+                lines = ["📅 Yarınki etkinlikler:"]
+                for e in filtered:
+                    lines.append(f"  • {e['title']}")
+                return "\n".join(lines)
+
+            elif "kaç gün" in msg or "ne zaman" in msg:
+                for e in events:
+                    if any(word in msg for word in e["title"].lower().split()):
+                        d = e["days_left"]
+                        if d == 0:
+                            return f"⏰ '{e['title']}' BUGÜN!"
+                        elif d == 1:
+                            return f"⏰ '{e['title']}' yarın!"
+                        else:
+                            return f"⏰ '{e['title']}' etkinliğine {d} gün kaldı."
+                # Genel yaklaşan
+                e = events[0]
+                d = e["days_left"]
+                return f"⏰ En yakın etkinliğin '{e['title']}' — {d} gün kaldı."
+
+            else:
+                # Genel takvim özeti
+                return format_events_response(events)
+
+        except Exception as ex:
+            return f"⚠️ Takvime erişirken hata oluştu: {str(ex)}\nİlk çalıştırmada tarayıcıda Google girişi yapman gerekebilir."
