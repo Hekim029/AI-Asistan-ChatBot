@@ -1,5 +1,5 @@
 from datetime import datetime
-from email.mime import message
+from email import message
 from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
 from services.llm_client import LLMClient
@@ -9,6 +9,8 @@ import utils.config as config
 from services.web_controller import handle_web_command
 from services.system_info import get_system_status
 from services.app_launcher import launch_app
+from services.pc_controller import handle_file_command
+from services.app_launcher import launch_app, close_app, media_control, volume_control
 
 class Router:
 
@@ -30,20 +32,18 @@ class Router:
             response = "Merhaba! Sana nasıl yardımcı olabilirim?"
         elif intent == "system":
             response = get_system_status()
-        elif intent == "app_launch" or intent == "web":
-            if "spotify" in message_lower:
-                response = self._get_web(message)
-                if response:
-                    self.context.add_message("assistant", response)
-                    return response
+        elif intent == "app_launch":
             target = message_lower
             for word in ["aç", "başlat", "çalıştır", "open", "lütfen", "uygulamasını"]:
                 target = target.replace(word, "")
             target = target.strip()
-            
             response = launch_app(target)
             if response is None:
                 response = self._get_web(message)
+        elif intent == "web":
+            response = self._get_web(message)
+        elif intent == "file":
+            response = self._get_file(message)
         elif intent == "farewell":
             response = "Görüşürüz! İyi günler."
         elif intent == "clear":
@@ -57,6 +57,12 @@ class Router:
             response = self._get_calendar(message)
         elif intent == "web":
             response = self._get_web(message)
+        elif intent == "app_close":
+            response = close_app(message) or "❌ Hangi uygulamayı kapatmamı istersin?"
+        elif intent == "media":
+            response = media_control(message) or "🎵 Hangi medya komutunu yapmamı istersin?"
+        elif intent == "volume":
+            response = volume_control(message) or "🔊 Ses komutunu anlamadım."
         else:
             response = self.llm.send(self.context.get_history(), self.user_memory.formatted())
 
@@ -79,7 +85,12 @@ class Router:
             return result
         return "🌐 Hangi siteyi veya aramayı yapmamı istersin?"
     
-
+    def _get_file(self, message: str) -> str:
+        result = handle_file_command(message)
+        if result:
+            return result
+        return "📁 Hangi dosya veya klasörle ilgili yardım istiyorsun?"
+    
     def _get_calendar(self, message: str) -> str:
         try:
             events = get_upcoming_events(days=365)
@@ -116,13 +127,11 @@ class Router:
                             return f"⏰ '{e['title']}' yarın!"
                         else:
                             return f"⏰ '{e['title']}' etkinliğine {d} gün kaldı."
-                # Genel yaklaşan
                 e = events[0]
                 d = e["days_left"]
                 return f"⏰ En yakın etkinliğin '{e['title']}' — {d} gün kaldı."
 
             else:
-                # Genel takvim özeti
                 return format_events_response(events)
 
         except Exception as ex:

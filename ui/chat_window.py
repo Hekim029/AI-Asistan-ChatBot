@@ -333,7 +333,6 @@ class ChatWindow(QMainWindow):
         bubble = QLabel(text)
         bubble.setWordWrap(True)
         bubble.setFont(QFont("Gill Sans MT", 10, QFont.Bold))
-        bubble.setTextFormat(Qt.PlainText)
         bubble.setMaximumWidth(290)
         bubble.setTextInteractionFlags(Qt.TextSelectableByMouse)
         bubble.mouseReleaseEvent = lambda e: self._on_selection_changed(bubble)
@@ -580,7 +579,7 @@ class MapBackgroundWidget(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._pixmap = QPixmap("assets/arka_plan_3.jpg")
+        self._pixmap = QPixmap("assets/arka_plan_10.jpg")
 
     def paintEvent(self, event):
         painter = QPainter(self)

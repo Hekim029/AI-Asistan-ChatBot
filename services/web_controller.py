@@ -1,35 +1,18 @@
 import webbrowser
 import urllib.parse
 import os
-import time
-import pyautogui
-import keyboard
 
 def handle_web_command(message: str) -> str:
     msg = message.lower().strip()
 
     if "spotify" in msg:
         query = _extract_query(message, ["spotify'da", "spotifyda", "spotify da", "spotify'de", "spotify"])
-        
         if query:
-            try:
-                os.startfile(f"spotify:search:{urllib.parse.quote(query)}")
-                
-                time.sleep(4) 
-                
-                keyboard.press_and_release('tab')
-                time.sleep(0.5)
-                keyboard.press_and_release('tab')
-                time.sleep(0.5)
-                
-                keyboard.press_and_release('enter')
-                time.sleep(1)
-                
-                keyboard.press_and_release('play/pause media')
-                
-                return f"🎵 Spotify'da '{query}' aranıyor ve başlatıldı!"
-            except Exception as e:
-                return f"⚠️ Hata: {str(e)}"
+            os.startfile(f"spotify:search:{urllib.parse.quote(query)}")
+            return f"🎵 Spotify'da '{query}' aranıyor..."
+        else:
+            os.startfile("spotify:")
+            return "🎵 Spotify açıldı."
     
     sites = {
         "fırat": "https://firat.edu.tr",
@@ -52,12 +35,12 @@ def handle_web_command(message: str) -> str:
             webbrowser.open(url)
             return f"🌐 {name.capitalize()} açıldı."
 
-    if "youtube" in msg:
-        query = _extract_query(msg, ["youtube'da", "youtubeda", "youtube da", "youtube'de", "youtube"])
-        if query:
-            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+    for name, url in sites.items():
+        if name in msg and any(word in msg for word in ["aç", "git", "giriş"]):
+            if name == "youtube":
+                continue
             webbrowser.open(url)
-            return f"🎬 YouTube'da '{query}' aranıyor..."
+            return f"🌐 {name.capitalize()} açıldı."
 
     if any(word in msg for word in ["harita", "maps", "nerede"]):
         query = _extract_query(msg, ["haritada", "maps'te", "nerede", "konumu"])
