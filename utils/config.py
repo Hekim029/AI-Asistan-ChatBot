@@ -1,7 +1,15 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+MEMORY_DIR = os.path.join(BASE_DIR, "memory")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL = "llama-3.3-70b-versatile"

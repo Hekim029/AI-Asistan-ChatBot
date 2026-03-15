@@ -44,13 +44,39 @@ def handle_file_command(message: str) -> str | None:
     msg = message.lower().strip()
 
     if any(word in msg for word in ["aç", "göster"]):
+        folder_mentioned = any(name in msg for name in FOLDERS.keys())
+        
+        if not folder_mentioned:
+            query = msg
+            for sw in ["klasörünü", "klasörü", "dosyayı", "aç", "göster", "lütfen"]:
+                query = query.replace(sw, "").strip()
+            if query:
+                target = _get_desktop() / query
+                if target.exists():
+                    os.startfile(str(target))
+                    return f"📁 '{query}' açıldı."
+                return _open_file(query)
+        
         for name, path in FOLDERS.items():
             if name in msg:
-                if path.exists():
-                    os.startfile(str(path))
-                    return f"📁 {name.capitalize()} klasörü açıldı."
+                idx = msg.index(name) + len(name)
+                rest = msg[idx:].strip()
+                for sw in ["klasörünü", "klasörü", "aç", "göster"]:
+                    rest = rest.replace(sw, "").strip()
+                
+                if rest:
+                    target = path / rest
+                    if target.exists():
+                        os.startfile(str(target))
+                        return f"📁 '{rest}' açıldı."
+                    else:
+                        return _open_file(rest)
                 else:
-                    return f"⚠️ {name.capitalize()} klasörü bulunamadı: {path}"
+                    if path.exists():
+                        os.startfile(str(path))
+                        return f"📁 {name.capitalize()} klasörü açıldı."
+                    else:
+                        return f"⚠️ {name.capitalize()} klasörü bulunamadı."
 
     if "dosyayı aç" in msg or "dosya aç" in msg:
         query = _extract_filename(msg)

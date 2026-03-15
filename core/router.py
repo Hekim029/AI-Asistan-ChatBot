@@ -1,5 +1,4 @@
 from datetime import datetime
-from email import message
 from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
 from services.llm_client import LLMClient
@@ -8,9 +7,9 @@ from core.intent_detector import IntentDetector
 import utils.config as config
 from services.web_controller import handle_web_command
 from services.system_info import get_system_status
-from services.app_launcher import launch_app
-from services.pc_controller import handle_file_command
 from services.app_launcher import launch_app, close_app, media_control, volume_control
+from services.pc_controller import handle_file_command
+from services.gmail_reader import get_unread_emails, get_today_emails, send_email, search_emails
 
 class Router:
 
@@ -23,46 +22,55 @@ class Router:
     def get_response(self, message: str) -> str:
         self.context.add_message("user", message)
         intent = self.detector.detect(message)
-
         message_lower = message.lower().strip()
 
         if intent == "time":
             response = self._get_time()
+
         elif intent == "greeting":
             response = "Merhaba! Sana nasıl yardımcı olabilirim?"
-        elif intent == "system":
-            response = get_system_status()
-        elif intent == "app_launch":
-            target = message_lower
-            for word in ["aç", "başlat", "çalıştır", "open", "lütfen", "uygulamasını"]:
-                target = target.replace(word, "")
-            target = target.strip()
-            response = launch_app(target)
-            if response is None:
-                response = self._get_web(message)
-        elif intent == "web":
-            response = self._get_web(message)
-        elif intent == "file":
-            response = self._get_file(message)
+
         elif intent == "farewell":
             response = "Görüşürüz! İyi günler."
+
         elif intent == "clear":
             self.context.clear()
             response = "🗑️ Konuşma geçmişi temizlendi."
+
         elif intent == "remember":
             memory_text = self._extract_memory(message)
             self.user_memory.add(memory_text)
             response = f"✅ Kaydettim: {memory_text}"
-        elif intent == "calendar":
-            response = self._get_calendar(message)
-        elif intent == "web":
-            response = self._get_web(message)
+
+        elif intent == "system":
+            response = get_system_status()
+
+        elif intent == "app_launch":
+            response = launch_app(message)
+            if response is None:
+                response = self._get_web(message)
+
         elif intent == "app_close":
             response = close_app(message) or "❌ Hangi uygulamayı kapatmamı istersin?"
+
         elif intent == "media":
             response = media_control(message) or "🎵 Hangi medya komutunu yapmamı istersin?"
+
         elif intent == "volume":
             response = volume_control(message) or "🔊 Ses komutunu anlamadım."
+
+        elif intent == "calendar":
+            response = self._get_calendar(message)
+
+        elif intent == "web":
+            response = self._get_web(message)
+
+        elif intent == "file":
+            response = self._get_file(message)
+
+        elif intent == "gmail":
+            response = self._get_gmail(message)
+
         else:
             response = self.llm.send(self.context.get_history(), self.user_memory.formatted())
 
@@ -78,19 +86,63 @@ class Router:
                 idx = message.lower().index(trigger) + len(trigger)
                 return message[idx:].strip()
         return message.strip()
-    
+
     def _get_web(self, message: str) -> str:
         result = handle_web_command(message)
         if result:
             return result
         return "🌐 Hangi siteyi veya aramayı yapmamı istersin?"
-    
+
     def _get_file(self, message: str) -> str:
         result = handle_file_command(message)
         if result:
             return result
         return "📁 Hangi dosya veya klasörle ilgili yardım istiyorsun?"
-    
+
+    def _get_gmail(self, message: str) -> str:
+        msg = message.lower().strip()
+
+        if any(w in msg for w in ["mail at", "mail gönder", "yaz"]):
+            return self._parse_and_send_email(message)
+
+        if any(w in msg for w in ["'dan mail", "'den mail", "dan mail", "den mail", "var mı"]):
+            query = msg
+            for w in ["mail", "var mı", "geldi mi", "gönderdi mi"]:
+                query = query.replace(w, "").strip()
+            return search_emails(query)
+
+        if any(w in msg for w in ["bugün", "bugünkü"]):
+            return get_today_emails()
+
+        if any(w in msg for w in ["okunmamış", "yeni mail", "kaç mail"]):
+            return get_unread_emails()
+
+        return get_unread_emails()
+
+    def _parse_and_send_email(self, message: str) -> str:
+        import re
+        msg = message
+
+        email_match = re.search(r'[\w.-]+@[\w.-]+\.\w+', msg)
+        if not email_match:
+            return "⚠️ Geçerli bir email adresi bulunamadı."
+        to = email_match.group(0)
+
+        subject = "Heko'dan mesaj"
+        konu_match = re.search(r'konu[:\s]+(.+?)(?:içerik|mesaj|$)', msg, re.IGNORECASE)
+        if konu_match:
+            subject = konu_match.group(1).strip()
+
+        body = ""
+        icerik_match = re.search(r'(?:içerik|mesaj)[:\s]+(.+)', msg, re.IGNORECASE)
+        if icerik_match:
+            body = icerik_match.group(1).strip()
+
+        if not body:
+            return "⚠️ Mail içeriği bulunamadı. 'içerik: ...' şeklinde yaz."
+
+        return send_email(to, subject, body)
+
     def _get_calendar(self, message: str) -> str:
         try:
             events = get_upcoming_events(days=365)
@@ -135,4 +187,4 @@ class Router:
                 return format_events_response(events)
 
         except Exception as ex:
-            return f"⚠️ Takvime erişirken hata oluştu: {str(ex)}\nİlk çalıştırmada tarayıcıda Google girişi yapman gerekebilir."
+            return f"⚠️ Takvime erişirken hata oluştu: {str(ex)}"

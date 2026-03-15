@@ -66,6 +66,9 @@ def launch_app(message: str) -> str | None:
 
 def close_app(message: str) -> str | None:
     msg = message.lower().strip()
+    if any(w in msg for w in ["youtube", "netflix", "instagram", "github", "sekme", "tarayıcı"]):
+        from services.web_controller import close_browser_tab
+        return close_browser_tab(msg)
     for word in ["kapat", "kaldır", "durdur", "sonlandır", "kapa"]:
         msg = msg.replace(word, "").strip()
     for app_name, process in PROCESS_NAMES.items():
@@ -109,11 +112,12 @@ def volume_control(message: str) -> str | None:
     m = re.search(r'(\d+)', msg)
     if m:
         level = int(m.group(1))
-    if re.match:
-        level = int(re.match.group(1))
         level = max(0, min(100, level))
         nircmd_level = int(level * 655.35)
-        subprocess.run(f"nircmd setsysvolume {nircmd_level}", shell=True)
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        nircmd = os.path.join(base, "nircmd.exe")
+        subprocess.run(f'"{nircmd}" setsysvolume {nircmd_level}', shell=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return f"🔊 Ses seviyesi %{level}'e ayarlandı."
 
     return None

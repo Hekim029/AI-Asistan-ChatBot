@@ -2,6 +2,7 @@ import json
 import os
 import random
 from datetime import date
+from utils.config import MEMORY_DIR
 
 MOTIVATIONS = [
     "🚀 Bugün harika şeyler başaracaksın!",
@@ -21,7 +22,7 @@ MOTIVATIONS = [
     "💻 Klavyen senin sihir değneğin, kullan!",
 ]
 
-_SAVE_PATH = "memory/daily_motivation.json"
+_SAVE_PATH = os.path.join(MEMORY_DIR, "daily_motivation.json")
 
 def get_today_motivation() -> str | None:
     today = str(date.today())

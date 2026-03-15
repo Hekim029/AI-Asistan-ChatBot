@@ -1,6 +1,9 @@
+import time
 import webbrowser
 import urllib.parse
 import os
+import pygetwindow as gw
+import pyautogui
 
 def handle_web_command(message: str) -> str:
     msg = message.lower().strip()
@@ -9,11 +12,16 @@ def handle_web_command(message: str) -> str:
         query = _extract_query(message, ["spotify'da", "spotifyda", "spotify da", "spotify'de", "spotify"])
         if query:
             os.startfile(f"spotify:search:{urllib.parse.quote(query)}")
-            return f"🎵 Spotify'da '{query}' aranıyor..."
+            import keyboard
+            time.sleep(3)
+            keyboard.press_and_release("enter")
+            time.sleep(0.3)
+            keyboard.press_and_release("enter")
+            return f"🎵 Spotify'da '{query}' çalınıyor..."
         else:
             os.startfile("spotify:")
             return "🎵 Spotify açıldı."
-    
+
     sites = {
         "fırat": "https://firat.edu.tr",
         "firat": "https://firat.edu.tr",
@@ -23,17 +31,9 @@ def handle_web_command(message: str) -> str:
         "gmail": "https://mail.google.com",
         "netflix": "https://netflix.com",
         "youtube": "https://www.youtube.com",
-        "trendol": "https://www.trendyol.com",
         "trendyol": "https://www.trendyol.com",
         "hepsiburada": "https://www.hepsiburada.com",
     }
-
-    for name, url in sites.items():
-        if name in msg and any(word in msg for word in ["aç", "git", "giriş"]):
-            if name == "youtube" and any(trigger in msg for trigger in ["da", "de", "ara"]):
-                break 
-            webbrowser.open(url)
-            return f"🌐 {name.capitalize()} açıldı."
 
     for name, url in sites.items():
         if name in msg and any(word in msg for word in ["aç", "git", "giriş"]):
@@ -41,6 +41,20 @@ def handle_web_command(message: str) -> str:
                 continue
             webbrowser.open(url)
             return f"🌐 {name.capitalize()} açıldı."
+
+    if "youtube" in msg:
+        if msg.strip() in ["youtube aç", "youtube'u aç", "youtubeyi aç", "youtube"]:
+            webbrowser.open("https://www.youtube.com")
+            return "🎬 YouTube açıldı."
+        
+        query = _extract_query(msg, ["youtube'da", "youtubeda", "youtube da", "youtube'de", "youtube"])
+        if query and query not in ["aç", "ac"]:
+            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+            webbrowser.open(url)
+            return f"🎬 YouTube'da '{query}' aranıyor..."
+        else:
+            webbrowser.open("https://www.youtube.com")
+            return "🎬 YouTube açıldı."
 
     if any(word in msg for word in ["harita", "maps", "nerede"]):
         query = _extract_query(msg, ["haritada", "maps'te", "nerede", "konumu"])
@@ -62,19 +76,47 @@ def handle_web_command(message: str) -> str:
 def _extract_query(message: str, triggers: list) -> str:
     msg = message.lower().strip()
     msg = msg.replace('"', '').replace("'", "")
-    
+
     triggers_sorted = sorted(triggers, key=len, reverse=True)
     for trigger in triggers_sorted:
         if trigger in msg:
             idx = msg.index(trigger) + len(trigger)
             query = msg[idx:].strip()
-            
-            suffixes = [
-                " şarkısını başlat", " şarkıyı başlat", " şarkısını çal", 
-                " şarkıyı çal", " başlat", " çal", " aç", " şarkısı"
-            ]
-            for suffix in suffixes:
+            for suffix in [" şarkısını başlat", " şarkıyı başlat", " şarkısını çal",
+                           " şarkıyı çal", " başlat", " çal", " aç", " şarkısı"]:
                 if query.endswith(suffix):
                     query = query[:-len(suffix)].strip()
             return query
     return ""
+
+def close_browser_tab(query: str) -> str:
+    target = None
+    if "youtube" in query:
+        target = "youtube"
+    elif "netflix" in query:
+        target = "netflix"
+    elif "instagram" in query:
+        target = "instagram"
+    elif "github" in query:
+        target = "github"
+
+    all_windows = gw.getAllWindows()
+
+    for win in all_windows:
+        title = win.title.lower()
+        if target and target in title:
+            try:
+                win.restore()
+                time.sleep(0.3)
+                win.activate()
+                time.sleep(0.6)
+                x = win.left + win.width // 2
+                y = win.top + win.height // 2
+                pyautogui.click(x, y)
+                time.sleep(0.3)
+                pyautogui.hotkey("ctrl", "w")
+                return f"❌ {target.capitalize()} sekmesi kapatıldı."
+            except Exception as e:
+                return f"⚠️ Hata: {str(e)}"
+
+    return f"⚠️ '{target}' sekmesi bulunamadı."

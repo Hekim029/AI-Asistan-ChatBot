@@ -1,4 +1,10 @@
 import sys
+import os
+ 
+if getattr(sys, 'frozen', False):
+    os.chdir(os.path.dirname(sys.executable))
+
+import sys
 import keyboard
 from PySide6.QtWidgets import QApplication, QWidget, QMenu
 from PySide6.QtCore import QTimer, Qt, Signal, QObject
