@@ -1,18 +1,22 @@
 import sys
 import os
- 
+
 if getattr(sys, 'frozen', False):
     os.chdir(os.path.dirname(sys.executable))
 
-import sys
+ffmpeg_path = r"C:\Users\muham\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin"
+os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
+
 import keyboard
 from PySide6.QtWidgets import QApplication, QWidget, QMenu
 from PySide6.QtCore import QTimer, Qt, Signal, QObject
 from PySide6.QtGui import QPainter, QColor, QFont, QLinearGradient, QRadialGradient
 from ui.chat_window import ChatWindow
+import threading
 
 class HotkeySignal(QObject):
     triggered = Signal()
+
 
 class FloatingButton(QWidget):
 
@@ -63,7 +67,8 @@ class FloatingButton(QWidget):
         self.move(screen.width() - 90, screen.height() - 130)
 
         keyboard.add_hotkey("ctrl+shift+space", self._hotkey_signal.triggered.emit)
-
+        keyboard.add_hotkey("shift+c", lambda: self._chat._toggle_mic(), suppress=True)        
+   
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -149,12 +154,21 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    def _preload_whisper():
+        try:
+            from services.speech_listener import _get_model
+            _get_model()
+        except Exception:
+            pass
+    threading.Thread(target=_preload_whisper, daemon=True).start()
+
     chat = ChatWindow()
     button = FloatingButton(chat)
     chat._on_response_callback = button.start_flash
     button.show()
 
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()

@@ -28,6 +28,7 @@ class ChatWindow(QMainWindow):
         self._worker = None
         self._is_online = True
         self._on_response_callback = None
+        self._mic_worker = None
         self._history = HistoryWindow(self.router.context)
         self._setup_window()
         self._setup_ui()
@@ -41,6 +42,9 @@ class ChatWindow(QMainWindow):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool)
 
     def closeEvent(self, event):
+        if self._mic_worker and self._mic_worker.isRunning():
+            self._mic_worker.quit()
+            self._mic_worker.wait(2000)
         event.ignore()
         self.hide()
 
@@ -254,6 +258,17 @@ class ChatWindow(QMainWindow):
         """)
         self.input_field.returnPressed.connect(self._send_message)
 
+        self._mic_btn = QPushButton("🎤")
+        self._mic_btn.setFixedSize(38, 38)
+        self._mic_btn.setFont(QFont("Segoe UI", 13))
+        self._mic_btn.setStyleSheet("""
+            QPushButton { background-color: #21262d; color: #8b949e; border: none; border-radius: 19px; }
+            QPushButton:hover { background-color: #30363d; }
+            QPushButton:pressed { background-color: #e74c3c; color: #ffffff; }
+        """)
+        self._mic_btn.pressed.connect(self._start_mic)
+        self._mic_btn.released.connect(self._stop_mic)
+
         self._send_btn = QPushButton("↑")
         self._send_btn.setFixedSize(38, 38)
         self._send_btn.setFont(QFont("Arial", 13))
@@ -270,6 +285,7 @@ class ChatWindow(QMainWindow):
         self._send_btn.clicked.connect(self._send_message)
 
         send_layout.addWidget(self.input_field)
+        send_layout.addWidget(self._mic_btn)
         send_layout.addWidget(self._send_btn)
 
         layout.addWidget(self._search_bar)
@@ -574,6 +590,37 @@ class ChatWindow(QMainWindow):
         pos = self.frameGeometry().topLeft()
         self._history.move(pos.x() + 10, pos.y() + 60)
         self._history.show()
+
+    def _start_mic(self):
+        self._mic_btn.setText("⏹")
+        self.input_field.setPlaceholderText("Dinleniyor...")
+        from core.worker import MicWorker
+        self._mic_worker = MicWorker()
+        self._mic_worker.text_ready.connect(self._on_mic_result)
+        self._mic_worker.start()
+
+    def _stop_mic(self):
+        self._mic_btn.setText("🎤")
+        self.input_field.setPlaceholderText("Mesaj yaz...")
+
+    def _on_mic_result(self, text: str):
+        self._mic_btn.setChecked(False)
+        self._mic_btn.setText("🎤")
+        self.input_field.setPlaceholderText("Mesaj yaz...")
+        if text:
+            self.input_field.setText(text)
+            self._send_message()
+        else:
+            self._add_message("🎤 Ses anlaşılamadı, tekrar dene.", is_user=False)
+    
+    def _toggle_mic(self):
+        if self._mic_btn.isChecked():
+            self._mic_btn.setChecked(False)
+            self._stop_mic()
+        else:
+            self._mic_btn.setChecked(True)
+            self._start_mic()
+
 
 class MapBackgroundWidget(QWidget):
 

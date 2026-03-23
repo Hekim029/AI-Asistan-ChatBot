@@ -11,6 +11,7 @@ from services.app_launcher import launch_app, close_app, media_control, volume_c
 from services.pc_controller import handle_file_command
 from services.gmail_reader import get_unread_emails, get_today_emails, send_email, search_emails
 
+
 class Router:
 
     def __init__(self):
@@ -21,17 +22,28 @@ class Router:
 
     def get_response(self, message: str) -> str:
         self.context.add_message("user", message)
+
+        # Önce hızlı keyword ile dene
         intent = self.detector.detect(message)
-        message_lower = message.lower().strip()
+
+        # Keyword bulamazsa LLM'e sor
+        if intent == "llm":
+            intent = self.llm.detect_intent(message)
 
         if intent == "time":
             response = self._get_time()
 
         elif intent == "greeting":
-            response = "Merhaba! Sana nasıl yardımcı olabilirim?"
+            response = self.llm.send(
+                [{"role": "user", "content": message}],
+                self.user_memory.formatted()
+            )
 
         elif intent == "farewell":
-            response = "Görüşürüz! İyi günler."
+            response = self.llm.send(
+                [{"role": "user", "content": message}],
+                self.user_memory.formatted()
+            )
 
         elif intent == "clear":
             self.context.clear()
@@ -105,7 +117,7 @@ class Router:
         if any(w in msg for w in ["mail at", "mail gönder", "yaz"]):
             return self._parse_and_send_email(message)
 
-        if any(w in msg for w in ["'dan mail", "'den mail", "dan mail", "den mail", "var mı"]):
+        if any(w in msg for w in ["dan mail", "den mail", "var mı"]):
             query = msg
             for w in ["mail", "var mı", "geldi mi", "gönderdi mi"]:
                 query = query.replace(w, "").strip()
@@ -121,20 +133,18 @@ class Router:
 
     def _parse_and_send_email(self, message: str) -> str:
         import re
-        msg = message
-
-        email_match = re.search(r'[\w.-]+@[\w.-]+\.\w+', msg)
+        email_match = re.search(r'[\w.-]+@[\w.-]+\.\w+', message)
         if not email_match:
             return "⚠️ Geçerli bir email adresi bulunamadı."
         to = email_match.group(0)
 
         subject = "Heko'dan mesaj"
-        konu_match = re.search(r'konu[:\s]+(.+?)(?:içerik|mesaj|$)', msg, re.IGNORECASE)
+        konu_match = re.search(r'konu[:\s]+(.+?)(?:içerik|mesaj|$)', message, re.IGNORECASE)
         if konu_match:
             subject = konu_match.group(1).strip()
 
         body = ""
-        icerik_match = re.search(r'(?:içerik|mesaj)[:\s]+(.+)', msg, re.IGNORECASE)
+        icerik_match = re.search(r'(?:içerik|mesaj)[:\s]+(.+)', message, re.IGNORECASE)
         if icerik_match:
             body = icerik_match.group(1).strip()
 

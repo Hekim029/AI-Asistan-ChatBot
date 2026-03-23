@@ -47,13 +47,13 @@ class IntentDetector:
         ],
 
         "web": [
-            "google", "youtube", "ara", "search", "arama yap",
-            "harita", "maps", "wikipedia", "vikipedi",
-            "hava durumu", "internette ara",
-            "siteyi aç", "giriş yap", "git", "www.", ".com", ".net",
-            "web", "site", "sayfa", "araştır",
-            "gmail.com", "mail.google", "instagram", "twitter",
-            "github", "netflix", "trendyol", "hepsiburada",
+            "google'da", "googleda", "youtube'da", "youtubeda",
+            "internette ara", "siteyi aç", "giriş yap",
+            "www.", ".com", ".net", "web sitesi",
+            "wikipedia", "vikipedi", "harita", "maps",
+            "instagram aç", "twitter aç", "github aç",
+            "netflix aç", "trendyol aç", "hepsiburada aç",
+            "youtube aç", "google aç",
         ],
 
         "media": [

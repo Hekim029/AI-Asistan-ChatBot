@@ -33,6 +33,7 @@ def handle_web_command(message: str) -> str:
         "youtube": "https://www.youtube.com",
         "trendyol": "https://www.trendyol.com",
         "hepsiburada": "https://www.hepsiburada.com",
+        "google": "https://www.google.com",  # ← ekle
     }
 
     for name, url in sites.items():
@@ -63,7 +64,7 @@ def handle_web_command(message: str) -> str:
             webbrowser.open(url)
             return f"🗺️ Haritada '{query}' aranıyor..."
 
-    search_triggers = ["google'da", "googleda", "ara", "search", "nedir", "kimdir"]
+    search_triggers = ["google'da", "googleda", "internette ara", "google aç", "google da"]
     if any(trigger in msg for trigger in search_triggers):
         query = _extract_query(msg, search_triggers)
         if query:
