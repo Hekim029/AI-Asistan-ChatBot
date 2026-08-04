@@ -1,200 +1,235 @@
-from datetime import datetime
+"""
+Router — Heko'nun ana giriş noktası.
+
+ESKİ HALİ (~200 satır):
+  Intent tespit et -> 15 tane if/elif -> her biri farklı servise git ->
+  her servis kendi parametrelerini metinden çıkarsın.
+
+YENİ HALİ (~60 satır):
+  Mesajı LLM'e ver -> LLM hangi aracı çağıracağına karar versin ->
+  ToolExecutor çalıştırsın -> LLM sonucu cümleye çevirsin.
+
+Artık burada intent mantığı YOK. Router sadece:
+  1) Mesajı geçmişe kaydeder
+  2) LLM'e devreder
+  3) Cevabı geçmişe kaydeder
+"""
+
 from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
 from services.llm_client import LLMClient
-from services.calendar_reader import get_upcoming_events, format_events_response
-from core.intent_detector import IntentDetector
-import utils.config as config
-from services.web_controller import handle_web_command
-from services.system_info import get_system_status
-from services.app_launcher import launch_app, close_app, media_control, volume_control
-from services.pc_controller import handle_file_command
-from services.gmail_reader import get_unread_emails, get_today_emails, send_email, search_emails
+from services.reminder_manager import ReminderManager
+from services.task_manager import TaskManager
+from core.tools import ToolExecutor
+from core.local_intents import clarification_for, detect_local_tool, pending_slot_for
+from core.shared_state import SharedAssistantState
+from utils.config import MEMORY_DIR
+import os
 
 
 class Router:
 
-    def __init__(self):
-        self.context = ContextManager()
-        self.user_memory = UserMemory()
-        self.llm = LLMClient()
-        self.detector = IntentDetector()
+    def __init__(self, shared_state=None, session_id="main"):
+        shared_state = shared_state or SharedAssistantState()
+        self.session_id = session_id
+        self.shared_state = shared_state
+        self.llm         = LLMClient()
+        session_dir = os.path.join(MEMORY_DIR, "sessions")
+        self.context = ContextManager(
+            llm_client=self.llm,
+            save_path=os.path.join(session_dir, f"{session_id}.json"),
+        )
+        self.user_memory = shared_state.user_memory
+        self.reminders = shared_state.reminders
+        self.tasks = shared_state.tasks
+        self.workspace = shared_state.workspace
 
-    def get_response(self, message: str) -> str:
+        # ToolExecutor'a hafıza nesnelerini veriyoruz ki
+        # remember_about_user ve clear_history araçları çalışabilsin
+        self.executor = ToolExecutor(
+            user_memory=self.user_memory,
+            context_manager=self.context,
+            reminder_manager=self.reminders,
+            task_manager=self.tasks,
+            shared_workspace=self.workspace,
+            session_id=self.session_id,
+        )
+
+        # Son çağrılan araçlar — UI veya debug için
+        self.last_tools_used: list[str] = []
+        self._pending_local_slot = None
+
+    def get_response(self, message: str, on_status=None) -> str:
+        """
+        Kullanıcı mesajını işler ve cevabı döndürür.
+
+        :param on_status: (opsiyonel) her önemli aşamada çağrılan callback.
+                          UI'da "Düşünüyor...", "Klasör açılıyor..." gibi
+                          anlık durumlar göstermek için kullanılır.
+                          Worker (ayrı thread) bunu bir Qt sinyaline
+                          çevirip ana thread'e güvenli şekilde iletir.
+        """
         self.context.add_message("user", message)
 
-        # Önce hızlı keyword ile dene
-        intent = self.detector.detect(message)
+        self.last_tools_used = []
+        normalized = " ".join(message.lower().strip().split())
 
-        # Keyword bulamazsa LLM'e sor
-        if intent == "llm":
-            intent = self.llm.detect_intent(message)
+        if getattr(self, "_pending_local_slot", None):
+            if normalized in {"iptal", "vazgeçtim", "boşver", "boş ver"}:
+                self._pending_local_slot = None
+                response = "Tamam, bu isteği iptal ettim."
+                self.context.add_message("assistant", response)
+                return response
+            slot = self._pending_local_slot
+            self._pending_local_slot = None
+            if slot == "note":
+                local_call = ("add_note", {"text": message.strip(), "tags": []})
+            elif slot == "task":
+                local_call = ("add_task", {"title": message.strip(), "due_at": ""})
+            elif slot == "weather":
+                local_call = ("get_weather", {"city": message.strip(), "period": "today"})
+            else:
+                local_call = ("read_text_file", {"path": message.strip()})
+            tool_name, args = local_call
+            if on_status:
+                on_status(self._friendly_status(tool_name))
+            self._on_tool_used(tool_name, args)
+            response = self.executor.execute(tool_name, args)
+            self.context.add_message("assistant", response)
+            self.workspace.publish(self.session_id, "tool", message, response)
+            return response
 
-        if intent == "time":
-            response = self._get_time()
+        if self.executor.has_pending_action():
+            if normalized in {
+                "onaylıyorum", "onayla", "evet", "evet yap",
+                "tamam yap", "işlemi yap",
+            }:
+                if on_status:
+                    on_status("Onaylanan işlem uygulanıyor...")
+                response = self.executor.execute(
+                    "confirm_pending_action", {}
+                )
+                self.context.add_message("assistant", response)
+                return response
+            if normalized in {
+                "iptal", "iptal et", "hayır", "vazgeçtim",
+                "yapma", "işlemi iptal et",
+            }:
+                response = self.executor.execute(
+                    "cancel_pending_action", {}
+                )
+                self.context.add_message("assistant", response)
+                return response
 
-        elif intent == "greeting":
-            response = self.llm.send(
-                [{"role": "user", "content": message}],
-                self.user_memory.formatted()
+        local_call = detect_local_tool(message)
+        if local_call:
+            tool_name, args = local_call
+            if on_status:
+                on_status(self._friendly_status(tool_name))
+            self._on_tool_used(tool_name, args)
+            response = self.executor.execute(tool_name, args)
+            self.context.add_message("assistant", response)
+            self.workspace.publish(self.session_id, "tool", message, response)
+            return response
+
+        clarification = clarification_for(message)
+        if clarification:
+            self._pending_local_slot = pending_slot_for(message)
+            self.context.add_message("assistant", clarification)
+            return clarification
+
+        if on_status:
+            on_status("Düşünüyor...")
+
+        def handle_tool(tool_name: str, args: dict):
+            self._on_tool_used(tool_name, args)
+            if on_status:
+                on_status(self._friendly_status(tool_name))
+
+        try:
+            shared_context = self.workspace.formatted_context(self.session_id, limit=6)
+            response = self.llm.chat(
+                messages=self.context.get_history(limit=8),
+                user_context="\n\n".join(
+                    part for part in (self.user_memory.formatted(), shared_context) if part
+                ),
+                executor=self.executor,
+                on_tool_used=handle_tool,
             )
-
-        elif intent == "farewell":
-            response = self.llm.send(
-                [{"role": "user", "content": message}],
-                self.user_memory.formatted()
-            )
-
-        elif intent == "clear":
-            self.context.clear()
-            response = "🗑️ Konuşma geçmişi temizlendi."
-
-        elif intent == "remember":
-            memory_text = self._extract_memory(message)
-            self.user_memory.add(memory_text)
-            response = f"✅ Kaydettim: {memory_text}"
-
-        elif intent == "system":
-            response = get_system_status()
-
-        elif intent == "app_launch":
-            response = launch_app(message)
-            if response is None:
-                response = self._get_web(message)
-
-        elif intent == "app_close":
-            response = close_app(message) or "❌ Hangi uygulamayı kapatmamı istersin?"
-
-        elif intent == "media":
-            response = media_control(message) or "🎵 Hangi medya komutunu yapmamı istersin?"
-
-        elif intent == "volume":
-            response = volume_control(message) or "🔊 Ses komutunu anlamadım."
-
-        elif intent == "calendar":
-            response = self._get_calendar(message)
-
-        elif intent == "web":
-            response = self._get_web(message)
-
-        elif intent == "file":
-            response = self._get_file(message)
-
-        elif intent == "gmail":
-            response = self._get_gmail(message)
-
-        else:
-            response = self.llm.send(self.context.get_history(), self.user_memory.formatted())
+        except Exception as e:
+            from services.error_logger import log_exception
+            log_exception("router", e)
+            response = f"Bir sorun oluştu: {e}"
 
         self.context.add_message("assistant", response)
+        self.workspace.publish(self.session_id, "conversation", message, response)
         return response
 
-    def _get_time(self) -> str:
-        return f"Şu an saat: {datetime.now().strftime('%H:%M')}"
+    # ─────────────────────────────────────────
+    #  Araç kullanım takibi
+    # ─────────────────────────────────────────
 
-    def _extract_memory(self, message: str) -> str:
-        for trigger in ["bunu hatırla", "bunu kaydet", "hatırla:", "kaydet:"]:
-            if trigger in message.lower():
-                idx = message.lower().index(trigger) + len(trigger)
-                return message[idx:].strip()
-        return message.strip()
+    # Her aracın kullanıcıya gösterilecek dostça Türkçe karşılığı.
+    # Burada olmayan bir araç için genel bir mesaj kullanılır — yeni
+    # araç eklendiğinde buraya satır eklemek ZORUNLU değildir, sistem
+    # esnek kalır.
+    _STATUS_MAP = {
+        "get_time":            "Saate bakılıyor...",
+        "create_reminder":     "Hatırlatıcı kuruluyor...",
+        "list_reminders":      "Hatırlatıcılar kontrol ediliyor...",
+        "cancel_reminder":     "Hatırlatıcı iptal ediliyor...",
+        "get_weather":         "Hava durumu kontrol ediliyor...",
+        "add_task":            "Görev ekleniyor...",
+        "list_tasks":          "Görevler kontrol ediliyor...",
+        "complete_task":       "Görev tamamlanıyor...",
+        "add_note":            "Not kaydediliyor...",
+        "list_notes":          "Notlar kontrol ediliyor...",
+        "get_daily_briefing":  "Günlük özet hazırlanıyor...",
+        "open_folder":         "Klasör açılıyor...",
+        "list_folder":         "Klasör içeriği listeleniyor...",
+        "search_file":         "Dosya aranıyor...",
+        "delete_file":         "Dosya siliniyor...",
+        "launch_app":          "Uygulama açılıyor...",
+        "close_app":           "Uygulama kapatılıyor...",
+        "control_volume":      "Ses ayarlanıyor...",
+        "control_media":       "Medya kontrol ediliyor...",
+        "open_website":        "Site açılıyor...",
+        "search_web":          "İnternette aranıyor...",
+        "get_calendar":        "Takvime bakılıyor...",
+        "create_calendar_event": "Takvim etkinliği hazırlanıyor...",
+        "update_calendar_event": "Takvim etkinliği güncelleniyor...",
+        "delete_calendar_event": "Takvim etkinliği siliniyor...",
+        "get_emails":          "Mailler kontrol ediliyor...",
+        "read_email":          "Mail içeriği okunuyor...",
+        "send_email":          "Mail gönderiliyor...",
+        "get_system_status":   "Sistem durumu kontrol ediliyor...",
+        "remember_about_user": "Not alınıyor...",
+        "list_user_memory":    "Hafızaya bakılıyor...",
+        "forget_user_memory":  "Hafıza kaydı siliniyor...",
+        "clear_history":       "Geçmiş temizleniyor...",
+        "confirm_pending_action": "Onaylanan işlem uygulanıyor...",
+        "cancel_pending_action":  "Bekleyen işlem iptal ediliyor...",
+    }
 
-    def _get_web(self, message: str) -> str:
-        result = handle_web_command(message)
-        if result:
-            return result
-        return "🌐 Hangi siteyi veya aramayı yapmamı istersin?"
+    def _friendly_status(self, tool_name: str) -> str:
+        return self._STATUS_MAP.get(tool_name, "İşlem yapılıyor...")
 
-    def _get_file(self, message: str) -> str:
-        result = handle_file_command(message)
-        if result:
-            return result
-        return "📁 Hangi dosya veya klasörle ilgili yardım istiyorsun?"
+    def _on_tool_used(self, tool_name: str, args: dict):
+        """
+        LLM bir araç çağırdığında tetiklenir.
+        Loglar ve last_tools_used listesine ekler (debug/UI amaçlı).
+        """
+        self.last_tools_used.append(tool_name)
+        print(f"🔧 Araç: {tool_name}({args})")
 
-    def _get_gmail(self, message: str) -> str:
-        msg = message.lower().strip()
+    # ─────────────────────────────────────────
+    #  Dışarıdan erişim (UI için)
+    # ─────────────────────────────────────────
 
-        if any(w in msg for w in ["mail at", "mail gönder", "yaz"]):
-            return self._parse_and_send_email(message)
+    def clear_history(self):
+        """UI'daki temizle butonu için."""
+        self.context.clear()
 
-        if any(w in msg for w in ["dan mail", "den mail", "var mı"]):
-            query = msg
-            for w in ["mail", "var mı", "geldi mi", "gönderdi mi"]:
-                query = query.replace(w, "").strip()
-            return search_emails(query)
-
-        if any(w in msg for w in ["bugün", "bugünkü"]):
-            return get_today_emails()
-
-        if any(w in msg for w in ["okunmamış", "yeni mail", "kaç mail"]):
-            return get_unread_emails()
-
-        return get_unread_emails()
-
-    def _parse_and_send_email(self, message: str) -> str:
-        import re
-        email_match = re.search(r'[\w.-]+@[\w.-]+\.\w+', message)
-        if not email_match:
-            return "⚠️ Geçerli bir email adresi bulunamadı."
-        to = email_match.group(0)
-
-        subject = "Heko'dan mesaj"
-        konu_match = re.search(r'konu[:\s]+(.+?)(?:içerik|mesaj|$)', message, re.IGNORECASE)
-        if konu_match:
-            subject = konu_match.group(1).strip()
-
-        body = ""
-        icerik_match = re.search(r'(?:içerik|mesaj)[:\s]+(.+)', message, re.IGNORECASE)
-        if icerik_match:
-            body = icerik_match.group(1).strip()
-
-        if not body:
-            return "⚠️ Mail içeriği bulunamadı. 'içerik: ...' şeklinde yaz."
-
-        return send_email(to, subject, body)
-
-    def _get_calendar(self, message: str) -> str:
-        try:
-            events = get_upcoming_events(days=365)
-            if not events:
-                return "📅 Takviminde önümüzdeki 365 gün içinde etkinlik bulamadım."
-
-            msg = message.lower()
-
-            if "bugün" in msg:
-                filtered = [e for e in events if e["days_left"] == 0]
-                if not filtered:
-                    return "📅 Bugün için takviminde etkinlik yok."
-                lines = ["📅 Bugünkü etkinlikler:"]
-                for e in filtered:
-                    lines.append(f"  • {e['title']}")
-                return "\n".join(lines)
-
-            elif "yarın" in msg:
-                filtered = [e for e in events if e["days_left"] == 1]
-                if not filtered:
-                    return "📅 Yarın için takviminde etkinlik yok."
-                lines = ["📅 Yarınki etkinlikler:"]
-                for e in filtered:
-                    lines.append(f"  • {e['title']}")
-                return "\n".join(lines)
-
-            elif "kaç gün" in msg or "ne zaman" in msg:
-                for e in events:
-                    if any(word in msg for word in e["title"].lower().split()):
-                        d = e["days_left"]
-                        if d == 0:
-                            return f"⏰ '{e['title']}' BUGÜN!"
-                        elif d == 1:
-                            return f"⏰ '{e['title']}' yarın!"
-                        else:
-                            return f"⏰ '{e['title']}' etkinliğine {d} gün kaldı."
-                e = events[0]
-                d = e["days_left"]
-                return f"⏰ En yakın etkinliğin '{e['title']}' — {d} gün kaldı."
-
-            else:
-                return format_events_response(events)
-
-        except Exception as ex:
-            return f"⚠️ Takvime erişirken hata oluştu: {str(ex)}"
+    def get_history(self, limit: int = None):
+        """Geçmiş penceresi için — timestamp dahil."""
+        return self.context.get_raw_history(limit)

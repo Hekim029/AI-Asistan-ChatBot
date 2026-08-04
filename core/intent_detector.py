@@ -1,85 +1,161 @@
 import re
 
-class IntentDetector:
-    _INTENTS = {
-        "time": ["saat kaç", "what time", "saat"],
-        "greeting": ["merhaba", "selam", "hey", "hi", "hello"],
-        "farewell": ["görüşürüz", "hoşça kal", "bye", "goodbye"],
-        "clear": ["temizle", "sıfırla", "clear", "reset"],
-        "remember": ["bunu hatırla", "bunu kaydet", "hatırla:", "kaydet:"],
 
+class IntentDetector:
+    """
+    Keyword tabanlı hızlı intent tespiti.
+
+    ÖNEMLİ KAVRAM — İki tip keyword var:
+
+    1) STRICT (katı):  Kelime sınırıyla aranır. "çal" yazarsak "çalan" eşleşmez.
+                       Kısa ve başka kelimelerin içinde geçebilecek kelimeler için.
+                       Örn: çal, ara, harita, ders, saat
+
+    2) LOOSE (esnek):  Substring olarak aranır. "masaüstü" yazarsak "masaüstümü"
+                       de eşleşir. Türkçe ek alabilen özel isimler için.
+                       Örn: masaüstü, youtube, spotify, takvim
+    """
+
+    # ─────────────────────────────────────────────
+    #  Esnek keyword'ler — ek alabilir, substring yeterli
+    # ─────────────────────────────────────────────
+    _LOOSE = {
         "calendar": [
-            "takvim", "etkinlik", "randevu", "sınav", "ders",
-            "ne zaman", "kaç gün kaldı", "bugün ne var", "yarın ne var",
-            "yaklaşan", "planım", "ajanda", "program",
-            "bayram", "bayrama", "bayramı", "tatil", "resmi tatil",
-            "ramazan", "kurban", "çocuk bayramı", "cumhuriyet",
-            "kaç gün var", "yaklaşıyor",
+            "takvim", "etkinlik", "randevu", "sınav",
+            "ajanda", "bayram", "tatil", "ramazan", "kurban",
+            "cumhuriyet", "yaklaşan",
         ],
 
         "gmail": [
-            "maillerimi göster", "e-posta göster", "gelen kutusu",
-            "mail at", "mail gönder", "okunmamış mail", "yeni mail",
-            "bugün mail", "kaç mail geldi", "kimden mail",
-            "maillerimi kontrol et", "inbox",
-            "kaç mesaj", "mesaj var", "mesaj bar", "kaç mail",
-            "mail var", "mail sayısı", "mail",
-        ],
-
-        "app_close": [
-            "spotify kapat", "chrome kapat", "firefox kapat",
-            "discord kapat", "steam kapat", "edge kapat",
-            "youtube kapat", "sekme kapat", "tarayıcı kapat",
-            "kapat", "kapa", "sonlandır",
+            "mail", "e-posta", "eposta", "inbox", "gelen kutusu",
         ],
 
         "app_launch": [
-            "spotify", "chrome", "firefox", "vs code", "vscode",
-            "notepad", "hesap makinesi", "görev yöneticisi",
-            "discord", "telegram", "whatsapp", "steam",
-            "word", "excel", "powerpoint", "dosya gezgini",
+            "spotify", "chrome", "firefox", "vscode", "vs code",
+            "notepad", "discord", "telegram", "whatsapp", "steam",
+            "excel", "powerpoint", "dosya gezgini", "hesap makinesi",
+            "görev yöneticisi",
         ],
 
         "file": [
-            "klasörü aç", "klasörü göster", "dosyayı aç", "dosyayı bul", "dosyayı sil",
-            "masaüstü", "masaustu", "indirmeler", "belgeler", "klasör",
-            "dosya", "listele", "içeriği",
+            "masaüstü", "masaustu", "indirmeler", "belgeler",
+            "klasör", "klasöre", "klasörü",
         ],
 
         "web": [
-            "google'da", "googleda", "youtube'da", "youtubeda",
-            "internette ara", "siteyi aç", "giriş yap",
-            "www.", ".com", ".net", "web sitesi",
-            "wikipedia", "vikipedi", "harita", "maps",
-            "instagram aç", "twitter aç", "github aç",
-            "netflix aç", "trendyol aç", "hepsiburada aç",
-            "youtube aç", "google aç",
-        ],
-
-        "media": [
-            "sonraki şarkı", "önceki şarkı", "müziği durdur",
-            "müzik devam", "next track", "previous track",
-        ],
-
-        "volume": [
-            "ses kıs", "sesi kıs", "sessiz", "mute",
-            "sesi artır", "ses yükselt", "ses azalt", "volume",
-            "ses seviyesi", "seviyesi olsun",
+            "youtube", "instagram", "twitter", "github", "netflix",
+            "trendyol", "hepsiburada", "wikipedia", "vikipedi",
+            "www.", ".com", ".net",
         ],
 
         "system": [
-            "sistem durumu", "cpu kullanımı", "ram kullanımı",
-            "sistem", "ram", "cpu", "işlemci", "bellek", "batarya", "pil", "durum",
+            "cpu", "işlemci", "bellek", "batarya",
         ],
     }
 
-    def detect(self, message: str) -> str:
-        message_lower = message.lower().strip()
+    # ─────────────────────────────────────────────
+    #  Katı keyword'ler — tam kelime eşleşmesi gerekir
+    # ─────────────────────────────────────────────
+    _STRICT = {
+        "time": ["saat", "saat kaç"],
 
-        if re.search(r'ses\s+\d+', message_lower):
+        "greeting": ["merhaba", "selam", "hey", "hi", "hello", "günaydın"],
+
+        "farewell": ["görüşürüz", "hoşça kal", "bye", "goodbye", "bay bay"],
+
+        "clear": ["temizle", "sıfırla", "clear", "reset"],
+
+        "remember": ["hatırla", "kaydet", "not al", "unutma"],
+
+        "calendar": ["ders", "program", "planım"],
+
+        "app_close": ["kapat", "kapa", "sonlandır"],
+
+        "file": ["listele", "dosya", "dosyayı", "dosyalar"],
+
+        "web": ["harita", "maps", "site", "siteyi"],
+
+        "media": [
+            "sonraki", "önceki", "durdur", "duraklat",
+            "next", "previous", "pause",
+        ],
+
+        "volume": [
+            "sessiz", "mute", "kıs", "yükselt", "azalt", "volume",
+        ],
+
+        "system": ["ram", "sistem", "pil", "durum"],
+    }
+
+    # ─────────────────────────────────────────────
+    #  Bu kelimeler varsa o intent KESİNLİKLE seçilmez
+    # ─────────────────────────────────────────────
+    _BLOCKERS = {
+        "media": ["çalan", "çalıyor", "hangi", "ne çalıyor", "şu an", "şuan"],
+        "web":   ["yol haritası", "yol harita"],
+    }
+
+    def detect(self, message: str) -> str:
+        msg = message.lower().strip()
+
+        # ── Öncelikli özel kurallar ──────────────────
+
+        # "ses 50 yap" gibi sayı içeren ses komutları
+        if re.search(r'ses\s+\d+', msg):
             return "volume"
 
-        for intent, keywords in self._INTENTS.items():
-            if any(kw in message_lower for kw in keywords):
+        # YouTube/Spotify geçiyorsa direkt web
+        if "youtube" in msg or "spotify" in msg:
+            return "web"
+
+        # ── Normal tarama ────────────────────────────
+
+        for intent in self._all_intents():
+            if self._is_blocked(intent, msg):
+                continue
+
+            if self._matches_loose(intent, msg):
                 return intent
+
+            if self._matches_strict(intent, msg):
+                return intent
+
         return "llm"
+
+    # ─────────────────────────────────────────────
+    #  Yardımcı metotlar
+    # ─────────────────────────────────────────────
+
+    def _all_intents(self) -> list[str]:
+        """
+        Kontrol sırası. Sıra ÖNEMLİ — üstteki önce kontrol edilir.
+        file, app_launch'tan önce gelmeli.
+        """
+        return [
+            "time", "greeting", "farewell", "clear", "remember",
+            "calendar", "gmail", "app_close", "file", "app_launch",
+            "web", "media", "volume", "system",
+        ]
+
+    def _matches_loose(self, intent: str, msg: str) -> bool:
+        """Substring araması — ek almış haller de eşleşir."""
+        keywords = self._LOOSE.get(intent, [])
+        return any(kw in msg for kw in keywords)
+
+    def _matches_strict(self, intent: str, msg: str) -> bool:
+        """
+        Kelime siniri aramasi.
+        \\b = word boundary. r"\\bcal\\b" -> "calan" icindeki "cal"i YAKALAMAZ.
+        re.escape() -> keyword'de ozel karakter varsa bozulmasin diye.
+        """
+        keywords = self._STRICT.get(intent, [])
+        for kw in keywords:
+            pattern = r'\b' + re.escape(kw) + r'\b'
+            if re.search(pattern, msg):
+                return True
+        return False
+
+    def _is_blocked(self, intent: str, msg: str) -> bool:
+        """Bu intent icin engelleyici kelime var mi?"""
+        blockers = self._BLOCKERS.get(intent, [])
+        return any(b in msg for b in blockers)

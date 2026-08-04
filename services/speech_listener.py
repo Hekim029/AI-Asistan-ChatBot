@@ -4,9 +4,14 @@ import scipy.io.wavfile as wav
 import tempfile
 import os
 import requests
+import utils.config as config
 
 def listen_and_transcribe(duration: int = 3, sample_rate: int = 16000) -> str | None:
+    tmp_path = None
     try:
+        if not config.GROQ_API_KEY:
+            return None
+
         audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate,
                       channels=1, dtype='int16')
         sd.wait()
@@ -14,22 +19,31 @@ def listen_and_transcribe(duration: int = 3, sample_rate: int = 16000) -> str | 
         tmp_path = os.path.join(tempfile.gettempdir(), "heko_audio.wav")
         wav.write(tmp_path, sample_rate, audio)
 
-        with open(tmp_path, 'rb') as f:
-            audio_data = f.read()
+        with open(tmp_path, "rb") as audio_file:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={
+                    "Authorization": f"Bearer {config.GROQ_API_KEY}",
+                },
+                files={
+                    "file": ("heko_audio.wav", audio_file, "audio/wav"),
+                },
+                data={
+                    "model": "whisper-large-v3-turbo",
+                    "language": "tr",
+                    "response_format": "json",
+                    "temperature": "0",
+                },
+                timeout=30,
+            )
+        response.raise_for_status()
+        return (response.json().get("text") or "").strip() or None
 
-        response = requests.post(
-            "http://www.google.com/speech-api/v2/recognize"
-            "?output=json&lang=tr-TR&key=AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw",
-            headers={"Content-Type": "audio/l16; rate=16000"},
-            data=audio_data
-        )
-
-        for line in response.text.strip().split('\n'):
-            if '"transcript"' in line:
-                import json
-                data = json.loads(line)
-                return data['result'][0]['alternative'][0]['transcript']
+    except Exception:
         return None
-
-    except Exception as e:
-        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass

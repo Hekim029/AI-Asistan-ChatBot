@@ -9,3 +9,14 @@ dist/
 *.spec
 memory/user_memory.json
 memory/daily_motivation.json
+memory/token.json
+memory/reminders.json
+memory/tasks.json
+memory/heko.log
+credentials.json
+memory/daily_briefing_config.json
+memory/daily_briefing_state.json
+memory/session_names.json
+memory/shared_workspace.json
+memory/sessions/
+memory/*.tmp

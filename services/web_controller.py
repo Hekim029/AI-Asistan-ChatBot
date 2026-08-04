@@ -44,19 +44,29 @@ def handle_web_command(message: str) -> str:
             return f"🌐 {name.capitalize()} açıldı."
 
     if "youtube" in msg:
-        if msg.strip() in ["youtube aç", "youtube'u aç", "youtubeyi aç", "youtube"]:
-            webbrowser.open("https://www.youtube.com")
-            return "🎬 YouTube açıldı."
+        open_triggers = ["aç", "git", "başlat", "open", "açsana", "açarmısın", "açar mısın"]
+        search_triggers = ["ara", "bul", "search", "izle", "'da", "da ", "de ", "te "]
+
+        has_open = any(t in msg for t in open_triggers)
+        has_search = any(t in msg for t in search_triggers)
+
+        query = _extract_query(msg, ["youtube'da", "youtubeda", "youtube da",
+                                    "youtube'de", "youtube de", "youtube"])
         
-        query = _extract_query(msg, ["youtube'da", "youtubeda", "youtube da", "youtube'de", "youtube"])
-        if query and query not in ["aç", "ac"]:
+        bad_queries = ["aç", "ac", "yi", "yu", "u", "ü", "açsana", ""]
+        if query and query not in bad_queries:
             url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
             webbrowser.open(url)
             return f"🎬 YouTube'da '{query}' aranıyor..."
-        else:
+
+        # Sorgu yoksa direkt aç
+        if has_open and not has_search:
             webbrowser.open("https://www.youtube.com")
             return "🎬 YouTube açıldı."
 
+        webbrowser.open("https://www.youtube.com")
+        return "🎬 YouTube açıldı."
+    
     if any(word in msg for word in ["harita", "maps", "nerede"]):
         query = _extract_query(msg, ["haritada", "maps'te", "nerede", "konumu"])
         if query:
@@ -83,6 +93,13 @@ def _extract_query(message: str, triggers: list) -> str:
         if trigger in msg:
             idx = msg.index(trigger) + len(trigger)
             query = msg[idx:].strip()
+            
+            for prefix in ["'de ", "'da ", "'yi ", "'yu ", "'u ", "'ü ",
+                           "de ", "da ", "yi ", "yu ", "te ", "ta "]:
+                if query.startswith(prefix):
+                    query = query[len(prefix):].strip()
+                    break
+
             for suffix in [" şarkısını başlat", " şarkıyı başlat", " şarkısını çal",
                            " şarkıyı çal", " başlat", " çal", " aç", " şarkısı"]:
                 if query.endswith(suffix):

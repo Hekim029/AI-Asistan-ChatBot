@@ -4,14 +4,15 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+import utils.config as config
 
 SCOPES = [
-    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
 ]
-TOKEN_PATH = "memory/token.json"
-CREDENTIALS_PATH = "credentials.json"
+TOKEN_PATH = os.path.join(config.MEMORY_DIR, "token.json")
+CREDENTIALS_PATH = os.path.join(config.BASE_DIR, "credentials.json")
 
 def get_service():
     creds = None
@@ -19,7 +20,7 @@ def get_service():
     if os.path.exists(TOKEN_PATH):
         creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
 
-    if not creds or not creds.valid:
+    if not creds or not creds.valid or not creds.has_scopes(SCOPES):
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
@@ -29,6 +30,76 @@ def get_service():
             token.write(creds.to_json())
 
     return build("calendar", "v3", credentials=creds)
+
+
+def create_calendar_event(
+    title: str,
+    start_at: str,
+    end_at: str,
+    description: str = "",
+) -> str:
+    service = get_service()
+    event = service.events().insert(
+        calendarId="primary",
+        body={
+            "summary": title,
+            "description": description,
+            "start": {"dateTime": start_at, "timeZone": "Europe/Istanbul"},
+            "end": {"dateTime": end_at, "timeZone": "Europe/Istanbul"},
+        },
+    ).execute()
+    return f"Takvim etkinliği oluşturuldu: {event.get('summary', title)}"
+
+
+def _find_primary_event(query: str) -> dict | None:
+    service = get_service()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    events = service.events().list(
+        calendarId="primary",
+        q=query,
+        timeMin=now,
+        singleEvents=True,
+        orderBy="startTime",
+        maxResults=10,
+    ).execute().get("items", [])
+    return events[0] if events else None
+
+
+def update_calendar_event(
+    query: str,
+    title: str = "",
+    start_at: str = "",
+    end_at: str = "",
+    description: str = "",
+) -> str:
+    event = _find_primary_event(query)
+    if not event:
+        return f"'{query}' ile eşleşen yaklaşan etkinlik bulunamadı."
+    if title:
+        event["summary"] = title
+    if description:
+        event["description"] = description
+    if start_at:
+        event["start"] = {"dateTime": start_at, "timeZone": "Europe/Istanbul"}
+    if end_at:
+        event["end"] = {"dateTime": end_at, "timeZone": "Europe/Istanbul"}
+    get_service().events().update(
+        calendarId="primary",
+        eventId=event["id"],
+        body=event,
+    ).execute()
+    return f"Takvim etkinliği güncellendi: {event.get('summary', query)}"
+
+
+def delete_calendar_event(query: str) -> str:
+    event = _find_primary_event(query)
+    if not event:
+        return f"'{query}' ile eşleşen yaklaşan etkinlik bulunamadı."
+    get_service().events().delete(
+        calendarId="primary",
+        eventId=event["id"],
+    ).execute()
+    return f"Takvim etkinliği silindi: {event.get('summary', query)}"
 
 def get_upcoming_events(days: int = 365) -> list:
     """Önümüzdeki X gün içindeki etkinlikleri tüm takvimlerden döndür."""

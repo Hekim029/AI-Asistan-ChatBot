@@ -1,11 +1,15 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextEdit
+    QPushButton, QTextEdit, QApplication
 )
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPainterPath
 import utils.config as config
 from utils.startup import enable_startup, disable_startup, is_startup_enabled
+from ui.memory_window import MemoryWindow
+from ui.diagnostics_window import DiagnosticsWindow
+from ui.organizer_window import OrganizerWindow
+from ui.daily_settings_window import DailySettingsWindow
 
 COLOR_PAIRS = [
     ("#4a9eff", "#1e242c", "Okyanus"),
@@ -59,14 +63,34 @@ class SettingsWindow(QWidget):
 
     saved = Signal()
 
-    def __init__(self):
+    def __init__(
+        self,
+        user_memory=None,
+        task_manager=None,
+        reminder_manager=None,
+        daily_briefing_service=None,
+        shared_workspace=None,
+    ):
         super().__init__()
         self._drag_pos = None
+        self._memory_window = (
+            MemoryWindow(user_memory) if user_memory is not None else None
+        )
+        self._diagnostics_window = DiagnosticsWindow()
+        self._organizer_window = (
+            OrganizerWindow(task_manager, reminder_manager, shared_workspace)
+            if task_manager is not None and reminder_manager is not None
+            else None
+        )
+        self._daily_settings_window = (
+            DailySettingsWindow(daily_briefing_service)
+            if daily_briefing_service is not None else None
+        )
         self._setup_window()
         self._setup_ui()
 
     def _setup_window(self):
-        self.setFixedSize(380, 560)
+        self.setFixedSize(380, 660)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -208,6 +232,38 @@ class SettingsWindow(QWidget):
         startup_row.addStretch()
         startup_row.addWidget(self._startup_btn)
 
+        memory_btn = QPushButton("Hafızayı Yönet")
+        memory_btn.setFixedHeight(34)
+        memory_btn.setEnabled(self._memory_window is not None)
+        memory_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0d1117; color: #c9d1d9;
+                border: 1px solid #30363d; border-radius: 8px;
+            }
+            QPushButton:hover { border-color: #4a9eff; color: #ffffff; }
+        """)
+        if self._memory_window is not None:
+            memory_btn.clicked.connect(self._open_memory)
+
+        diagnostics_btn = QPushButton("Sistem Kontrolü")
+        diagnostics_btn.setFixedHeight(34)
+        diagnostics_btn.setStyleSheet(memory_btn.styleSheet())
+        diagnostics_btn.clicked.connect(self._open_diagnostics)
+
+        organizer_btn = QPushButton("Kontrol Merkezini Aç")
+        organizer_btn.setFixedHeight(34)
+        organizer_btn.setEnabled(self._organizer_window is not None)
+        organizer_btn.setStyleSheet(memory_btn.styleSheet())
+        if self._organizer_window is not None:
+            organizer_btn.clicked.connect(self._open_organizer)
+
+        daily_btn = QPushButton("Günlük Özet Ayarları")
+        daily_btn.setFixedHeight(34)
+        daily_btn.setEnabled(self._daily_settings_window is not None)
+        daily_btn.setStyleSheet(memory_btn.styleSheet())
+        if self._daily_settings_window is not None:
+            daily_btn.clicked.connect(self._open_daily_settings)
+
         save_btn = QPushButton("💾  Kaydet")
         save_btn.setFixedHeight(38)
         save_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
@@ -225,10 +281,68 @@ class SettingsWindow(QWidget):
         content.addLayout(color_layout)
         content.addWidget(startup_label)
         content.addLayout(startup_row)
+        utility_row = QHBoxLayout()
+        utility_row.setSpacing(8)
+        utility_row.addWidget(memory_btn)
+        utility_row.addWidget(diagnostics_btn)
+        content.addLayout(utility_row)
+        content.addWidget(organizer_btn)
+        content.addWidget(daily_btn)
         content.addStretch()
         content.addWidget(save_btn)
 
         return content
+
+    def _open_memory(self):
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        screen = screen or QApplication.primaryScreen()
+        available = screen.availableGeometry()
+
+        # Önce Ayarlar'ın sağına açmayı dene. Ekrana sığmıyorsa sola al.
+        target_x = self.x() + self.width() + 12
+        if target_x + self._memory_window.width() > available.right() + 1:
+            target_x = self.x() - self._memory_window.width() - 12
+
+        # Her iki taraf da dar kalırsa pencereyi ekran sınırları içinde tut.
+        target_x = max(
+            available.left(),
+            min(target_x, available.right() - self._memory_window.width() + 1),
+        )
+        target_y = max(
+            available.top(),
+            min(self.y(), available.bottom() - self._memory_window.height() + 1),
+        )
+
+        self._memory_window.move(target_x, target_y)
+        self._memory_window.show()
+        self._memory_window.raise_()
+        self._memory_window.activateWindow()
+
+    def _open_diagnostics(self):
+        self._diagnostics_window.refresh()
+        self._diagnostics_window.show()
+        self._diagnostics_window.raise_()
+        self._diagnostics_window.activateWindow()
+
+    def _open_organizer(self):
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        screen = screen or QApplication.primaryScreen()
+        available = screen.availableGeometry()
+        x = max(available.left(), min(
+            self.x() - self._organizer_window.width() - 12,
+            available.right() - self._organizer_window.width() + 1,
+        ))
+        y = max(available.top(), min(
+            self.y(), available.bottom() - self._organizer_window.height() + 1,
+        ))
+        self._organizer_window.move(x, y)
+        self._organizer_window.show()
+        self._organizer_window.activateWindow()
+
+    def _open_daily_settings(self):
+        self._daily_settings_window.move(self.x(), self.y() + 80)
+        self._daily_settings_window.show()
+        self._daily_settings_window.activateWindow()
 
     def _update_startup_btn(self):
         if self._startup_enabled:

@@ -1,5 +1,11 @@
 import os
+import difflib
 from pathlib import Path
+
+
+# ─────────────────────────────────────────────
+#  Sistem klasörleri
+# ─────────────────────────────────────────────
 
 def _get_desktop() -> Path:
     paths = [
@@ -13,6 +19,7 @@ def _get_desktop() -> Path:
             return p
     return Path.home() / "Desktop"
 
+
 def _get_downloads() -> Path:
     paths = [
         Path.home() / "OneDrive" / "Downloads",
@@ -25,70 +32,235 @@ def _get_downloads() -> Path:
             return p
     return Path.home() / "Downloads"
 
+
 FOLDERS = {
-    "masaüstü": _get_desktop(),
-    "masaustu": _get_desktop(),
+    "masaüstü":   _get_desktop(),
+    "masaustu":   _get_desktop(),
     "indirmeler": _get_downloads(),
-    "downloads": _get_downloads(),
-    "belgeler": Path.home() / "Documents",
-    "documents": Path.home() / "Documents",
-    "resimler": Path.home() / "Pictures",
-    "pictures": Path.home() / "Pictures",
-    "müzik": Path.home() / "Music",
-    "muzik": Path.home() / "Music",
-    "videolar": Path.home() / "Videos",
-    "videos": Path.home() / "Videos",
+    "downloads":  _get_downloads(),
+    "belgeler":   Path.home() / "Documents",
+    "documents":  Path.home() / "Documents",
+    "resimler":   Path.home() / "Pictures",
+    "pictures":   Path.home() / "Pictures",
+    "müzik":      Path.home() / "Music",
+    "muzik":      Path.home() / "Music",
+    "videolar":   Path.home() / "Videos",
+    "videos":     Path.home() / "Videos",
 }
 
-def handle_file_command(message: str) -> str | None:
+
+# Target'tan temizlenecek kelimeler (fiil, ek, soru edatı)
+_NOISE_WORDS = {
+    "klasörüme", "klasörünü", "klasörümü", "klasörü", "klasöre", "klasör",
+    "dosyasını", "dosyamı", "dosyayı", "dosyası", "dosya",
+    "git", "gel", "aç", "açar", "aç", "göster", "getir", "bul",
+    "mısın", "misin", "musun", "müsün", "mi", "mı", "mu", "mü",
+    "lütfen", "bana", "benim", "bir", "şu", "o",
+}
+
+
+# ─────────────────────────────────────────────
+#  Ana giriş noktası
+# ─────────────────────────────────────────────
+
+def handle_file_command(message: str, llm_client=None) -> str | None:
+    """
+    llm_client verilirse doğal dil parsing kullanır.
+    Verilmezse eski keyword tabanlı yönteme düşer.
+    """
+    if llm_client:
+        return _handle_with_llm(message, llm_client)
+    return _handle_keyword(message)
+
+
+# ─────────────────────────────────────────────
+#  LLM tabanlı parsing
+# ─────────────────────────────────────────────
+
+def _handle_with_llm(message: str, llm_client) -> str | None:
+    cmd = llm_client.extract_file_command(message)
+
+    action   = cmd.get("action", "open")
+    raw      = cmd.get("target", "")
+    location = cmd.get("location", "").strip().lower()
+
+    target    = _clean_target(raw)
+    base_path = FOLDERS.get(location, _get_desktop())
+
+    if action == "open":
+        return _smart_open(target, base_path)
+    elif action == "list":
+        return _list_folder(base_path, location or "masaüstü")
+    elif action == "search":
+        return _search_file(target) if target else "🔍 Ne aramamı istersin?"
+    elif action == "delete":
+        return _delete_file(target) if target else "⚠️ Hangi dosyayı silmemi istersin?"
+
+    return None
+
+
+def _clean_target(target: str) -> str:
+    """
+    LLM'den gelen ham target'ı temizler.
+
+    Örnekler:
+      "ChatBot'ı"           -> "ChatBot"
+      "chatbot me"          -> "chatbot"
+      "ChatBot klasörüme"   -> "ChatBot"
+      "ChatBot açar mısın"  -> "ChatBot"
+
+    Mantık:
+      1) Apostrof varsa öncesini al (Türkçe özel isim eki: ChatBot'ı)
+      2) Kelimelere böl, gürültü kelimelerini at
+      3) Kalan 1-2 harflik parçaları at (ek kalıntısı)
+    """
+    if not target:
+        return ""
+
+    # 1) Apostrof temizliği — hem düz hem eğik tırnak
+    for apo in ["'", "'", "`", "´"]:
+        if apo in target:
+            target = target.split(apo)[0]
+
+    # 2) Gürültü kelimelerini at
+    words = target.strip().split()
+    kept = []
+    for w in words:
+        stripped = w.strip(".,!?;:").lower()
+        if stripped in _NOISE_WORDS:
+            continue
+        # 3) Tek/çift harflik kalıntı (Türkçe ek parçası) at
+        if len(stripped) <= 2 and not stripped.isdigit():
+            continue
+        kept.append(w)
+
+    return " ".join(kept).strip()
+
+
+def _smart_open(target: str, base_path: Path) -> str:
+    """
+    Hedefi 4 kademede arar:
+      1) Direkt eşleşme
+      2) Büyük/küçük harf farksız eşleşme
+      3) Kısmi eşleşme (substring)
+      4) FUZZY — yazım hatası toleransı ("CahtBot" -> "ChatBot")
+    """
+    if not target:
+        if base_path.exists():
+            os.startfile(str(base_path))
+            return f"📁 {base_path.name} klasörü açıldı."
+        return "⚠️ Klasör bulunamadı."
+
+    # Klasördeki tüm öğeleri bir kez oku
+    try:
+        items = list(base_path.iterdir())
+    except Exception:
+        items = []
+
+    names = [i.name for i in items]
+
+    # 1) Direkt eşleşme
+    direct = base_path / target
+    if direct.exists():
+        os.startfile(str(direct))
+        return f"📁 '{target}' açıldı."
+
+    # 2) Case-insensitive tam eşleşme
+    for item in items:
+        if item.name.lower() == target.lower():
+            os.startfile(str(item))
+            return f"📁 '{item.name}' açıldı."
+
+    # 3) Kısmi eşleşme (substring)
+    partial = [i for i in items if target.lower() in i.name.lower()]
+    if len(partial) == 1:
+        os.startfile(str(partial[0]))
+        return f"📁 '{partial[0].name}' açıldı."
+    elif len(partial) > 1:
+        shown = ", ".join(p.name for p in partial[:5])
+        return f"🔍 Birden fazla eşleşme var: {shown}\nHangisini açmamı istersin?"
+
+    # 4) FUZZY eşleşme — yazım hatası toleransı
+    match = _fuzzy_match(target, names)
+    if match:
+        path = base_path / match
+        os.startfile(str(path))
+        return f"📁 '{match}' açıldı. ('{target}' yazmışsın, bunu kastettin sanırım)"
+
+    # 5) Son çare: diğer klasörlerde geniş arama
+    return _open_file(target)
+
+
+def _fuzzy_match(target: str, candidates: list[str], cutoff: float = 0.6) -> str | None:
+    """
+    Yazım hatası toleranslı eşleştirme.
+
+    difflib.get_close_matches(): Python'un standart kütüphanesi.
+    İki metnin harf dizilimini karşılaştırıp 0.0–1.0 arası benzerlik puanı verir.
+
+      "CahtBot" vs "ChatBot" -> ~0.86  (yüksek, eşleşir)
+      "ChatBot" vs "Belgeler" -> ~0.13 (düşük, eşleşmez)
+
+    cutoff: Minimum benzerlik eşiği. 0.6 = %60 benzerlik.
+            Düşürürsen daha toleranslı ama yanlış eşleşme riski artar.
+    n=1: Sadece en iyi eşleşmeyi döndür.
+    """
+    if not target or not candidates:
+        return None
+
+    lower_map = {c.lower(): c for c in candidates}
+    matches = difflib.get_close_matches(
+        target.lower(),
+        list(lower_map.keys()),
+        n=1,
+        cutoff=cutoff
+    )
+    return lower_map[matches[0]] if matches else None
+
+
+# ─────────────────────────────────────────────
+#  Keyword tabanlı yöntem (fallback)
+# ─────────────────────────────────────────────
+
+def _handle_keyword(message: str) -> str | None:
     msg = message.lower().strip()
 
-    if any(word in msg for word in ["aç", "göster"]):
+    if any(word in msg for word in ["aç", "göster", "git"]):
         folder_mentioned = any(name in msg for name in FOLDERS.keys())
-        
+
         if not folder_mentioned:
             query = msg
-            for sw in ["klasörünü", "klasörü", "dosyayı", "aç", "göster", "lütfen"]:
+            for sw in ["klasörünü", "klasörü", "klasörüme", "dosyayı",
+                       "aç", "göster", "git", "lütfen"]:
                 query = query.replace(sw, "").strip()
             if query:
-                target = _get_desktop() / query
-                if target.exists():
-                    os.startfile(str(target))
-                    return f"📁 '{query}' açıldı."
-                return _open_file(query)
-        
+                return _smart_open(_clean_target(query), _get_desktop())
+
         for name, path in FOLDERS.items():
             if name in msg:
                 idx = msg.index(name) + len(name)
                 rest = msg[idx:].strip()
-                for sw in ["klasörünü", "klasörü", "aç", "göster"]:
+                for sw in ["klasörünü", "klasörü", "klasörüme", "aç", "göster", "git"]:
                     rest = rest.replace(sw, "").strip()
-                
+
+                # Kalan çok kısaysa Türkçe ek kalıntısıdır, yok say
+                if len(rest) <= 2:
+                    rest = ""
+
                 if rest:
-                    target = path / rest
-                    if target.exists():
-                        os.startfile(str(target))
-                        return f"📁 '{rest}' açıldı."
-                    else:
-                        return _open_file(rest)
+                    return _smart_open(_clean_target(rest), path)
                 else:
                     if path.exists():
                         os.startfile(str(path))
                         return f"📁 {name.capitalize()} klasörü açıldı."
-                    else:
-                        return f"⚠️ {name.capitalize()} klasörü bulunamadı."
-
-    if "dosyayı aç" in msg or "dosya aç" in msg:
-        query = _extract_filename(msg)
-        if query:
-            return _open_file(query)
+                    return f"⚠️ {name.capitalize()} klasörü bulunamadı."
 
     if any(word in msg for word in ["listele", "ne var", "içinde ne", "içeriği"]):
         for name, path in FOLDERS.items():
             if name in msg:
                 return _list_folder(path, name)
 
-    if any(word in msg for word in ["ara", "bul", "nerede", "dosyayı bul"]):
+    if any(word in msg for word in ["ara", "bul", "nerede"]):
         query = _extract_filename(msg)
         if query:
             return _search_file(query)
@@ -100,8 +272,16 @@ def handle_file_command(message: str) -> str | None:
 
     return None
 
+
+# ─────────────────────────────────────────────
+#  Ortak yardımcı fonksiyonlar
+# ─────────────────────────────────────────────
+
 def _open_file(query: str) -> str:
+    """Tüm ana dizinlerde dosya arar, fuzzy destekli."""
     search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
+
+    # Önce tam/kısmi eşleşme
     for directory in search_dirs:
         if not directory.exists():
             continue
@@ -109,7 +289,22 @@ def _open_file(query: str) -> str:
             if path.is_file():
                 os.startfile(str(path))
                 return f"📄 '{path.name}' açıldı."
-    return f"🔍 '{query}' dosyası bulunamadı."
+
+    # Sonra fuzzy — sadece üst seviye öğelerde
+    for directory in search_dirs:
+        if not directory.exists():
+            continue
+        try:
+            names = [p.name for p in directory.iterdir()]
+        except Exception:
+            continue
+        match = _fuzzy_match(query, names)
+        if match:
+            os.startfile(str(directory / match))
+            return f"📄 '{match}' açıldı. ('{query}' yazmışsın, bunu kastettin sanırım)"
+
+    return f"🔍 '{query}' bulunamadı."
+
 
 def _list_folder(path: Path, name: str) -> str:
     try:
@@ -118,9 +313,8 @@ def _list_folder(path: Path, name: str) -> str:
             return f"📂 {name.capitalize()} klasörü boş."
 
         folders = sorted([i.name for i in items if i.is_dir()])
-        files = sorted([i.name for i in items if i.is_file()])
-
-        lines = [f"📂 **{name.capitalize()}** — {len(items)} öğe\n"]
+        files   = sorted([i.name for i in items if i.is_file()])
+        lines   = [f"📂 **{name.capitalize()}** — {len(items)} öğe\n"]
 
         if folders:
             lines.append(f"**Klasörler ({len(folders)}):**")
@@ -142,14 +336,10 @@ def _list_folder(path: Path, name: str) -> str:
     except Exception as e:
         return f"⚠️ Hata: {str(e)}"
 
+
 def _search_file(query: str) -> str:
     try:
-        search_dirs = [
-            _get_desktop(),
-            Path.home() / "Documents",
-            _get_downloads(),
-        ]
-
+        search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
         results = []
         for directory in search_dirs:
             if not directory.exists():
@@ -165,15 +355,18 @@ def _search_file(query: str) -> str:
         lines = [f"🔍 **'{query}'** için {len(results)} sonuç:\n"]
         for r in results:
             lines.append(f"  📄 {r}")
-
         return "\n".join(lines)
     except Exception as e:
         return f"⚠️ Arama hatası: {str(e)}"
 
+
 def _delete_file(query: str) -> str:
     try:
-        search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
+        query = (query or "").strip()
+        if len(query) < 2:
+            return "⚠️ Silinecek dosyanın adını daha açık belirtmelisin."
 
+        search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
         found = []
         for directory in search_dirs:
             if not directory.exists():
@@ -192,27 +385,25 @@ def _delete_file(query: str) -> str:
             return "\n".join(lines)
 
         path = found[0]
-        path.unlink()
-        return f"🗑️ '{path.name}' silindi."
+        from send2trash import send2trash
+
+        send2trash(str(path))
+        return f"🗑️ '{path.name}' çöp kutusuna taşındı."
 
     except PermissionError:
         return "⚠️ Bu dosyayı silmek için izin yok."
     except Exception as e:
         return f"⚠️ Silme hatası: {str(e)}"
 
+
 def _extract_filename(message: str) -> str:
     msg = message.lower().strip()
-
     if '"' in message:
         parts = message.split('"')
         if len(parts) >= 3:
             return parts[1].strip()
-
-    stop_words = [
-        "dosyayı", "dosyasını", "klasörü", "bul", "ara", "sil",
-        "kaldır", "nerede", "aç", "listele", "içinde"
-    ]
+    stop_words = ["dosyayı", "dosyasını", "klasörü", "bul", "ara", "sil",
+                  "kaldır", "nerede", "aç", "listele", "içinde"]
     for word in stop_words:
         msg = msg.replace(word, "").strip()
-
     return msg.strip()

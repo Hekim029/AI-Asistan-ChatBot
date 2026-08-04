@@ -1,187 +1,242 @@
-# 🚀 Heko — AI Desktop Assistant
+# Heko — AI Desktop Assistant
 
-<p align="center">
-  <b>Masaüstünde yaşayan, konuşan, düşünen kişisel asistan.</b><br/>
-  Groq API ile güçlendirilmiş, PySide6 ile inşa edilmiştir.
-</p>
+Heko; Windows üzerinde çalışan, Türkçe doğal dil desteğine sahip, kişisel hafıza
+ve masaüstü araçları sunan PySide6 tabanlı bir yapay zekâ asistanıdır.
 
----
+Proje hâlen aktif geliştirme aşamasındadır. Dosya silme, e-posta gönderme ve
+takvim değişiklikleri gibi riskli işlemler kullanıcı onayı olmadan uygulanmaz.
 
-## ✨ Özellikler
+## Öne çıkan özellikler
 
-### 💬 Sohbet & AI
-- **Doğal dil ile sohbet** — Groq API (llama-3.3-70b-versatile) ile güçlü AI yanıtları
-- **Mod seçimi** — Normal, Eğlenceli, Ciddi, Teknik kişilik modları
-- **Hafıza** — Kullanıcı bilgilerini ve konuşma geçmişini hatırlar
-- **Günlük motivasyon** — Her gün bir kez ilham verici mesaj
+### Sohbet ve model desteği
 
-### 🖥️ Sistem Kontrolü
-- **Uygulama aç/kapat** — Spotify, Chrome, Discord, Steam ve daha fazlası
-- **Ses kontrolü** — Ses seviyesi ayarla, kıs, artır, sessiz yap
-- **Medya kontrolü** — Sonraki/önceki şarkı, duraklat, devam et
-- **Sistem bilgisi** — CPU, RAM, batarya durumu
+- Groq modelleriyle doğal dil sohbeti ve araç çağırma
+- Model kullanmadan çalışan yerel görev, not, hava ve dosya komutları
+- Groq kullanılamadığında isteğe bağlı Ollama yerel model desteği
+- Normal, eğlenceli, ciddi ve teknik kişilik modları
+- Uzun konuşmalarda otomatik bağlam küçültme
+- Mesaja göre dinamik araç seçimiyle daha düşük token kullanımı
 
-### 📁 Dosya Yönetimi
-- **Klasör aç** — Masaüstü, İndirmeler, Belgeler ve alt klasörler
-- **Dosya listele** — Klasör içeriğini göster
-- **Dosya ara** — Masaüstü, Belgeler, İndirmelerde ara
-- **Dosya sil** — Dosyaları sil
+### Çoklu sohbet ve ortak çalışma
 
-### 🌐 Web & Servisler
-- **Web arama** — Google'da ara, YouTube'da ara, harita
-- **Site açma** — Instagram, GitHub, Netflix, Trendyol ve daha fazlası
-- **Google Calendar** — Takvim etkinlikleri, yaklaşan etkinlikler, tatiller
-- **Gmail** — Okunmamış mailler, bugün gelenler, mail gönder
+- Aynı anda birden fazla bağımsız sohbet penceresi
+- Her pencere için ayrı konuşma geçmişi ve çalışan işlem
+- Pencereler arasında ortak görev, not, hatırlatıcı ve kişisel hafıza
+- Diğer pencerelerin sonuçlarını paylaşan kalıcı ortak çalışma alanı
+- Sohbet oturumlarını açma, gizleme ve yeniden adlandırma paneli
+- Kapatılan bir sohbeti aynı geçmiş ve isimle yeniden açma
+- Kontrol Merkezi içinde paylaşılan çalışmalar görünümü
 
-### 🎨 Arayüz
-- **Tema sistemi** — 7 renk çifti, kullanıcı ve AI balonu ayrı renk
-- **Floating button** — Sürüklenebilir, yanıt gelince yeşil parlar
-- **Geçmiş ekranı** — Tüm konuşma geçmişini ayrı pencerede gör
-- **Mesaj arama** — Konuşmalar içinde anlık arama
-- **Global kısayol** — `Ctrl+Shift+Space` ile her yerden aç
-- **Uzay nebula arayüzü** — Yarı saydam, oval köşeli
+### Kişisel asistan
 
----
+- Düzenlenebilir ve aranabilir kalıcı kullanıcı hafızası
+- Görev oluşturma, listeleme ve tamamlama
+- Etiketlenebilir, aranabilir ve tekrarları engellenen notlar
+- Kalıcı hatırlatıcı oluşturma, listeleme ve iptal
+- Son tarihi geçen görevler için `GECİKMİŞ` uyarısı
+- Sabah ve akşam otomatik günlük özetleri
+- Günlük özet saati, şehir ve etkinlik tercihleri
+- Open-Meteo üzerinden anahtarsız hava durumu
 
-## 🛠️ Teknolojiler
+### Masaüstü araçları
 
-| Teknoloji | Kullanım |
-|-----------|---------|
-| Python 3.11+ | Ana dil |
-| PySide6 | Masaüstü GUI |
-| Groq API | LLM (llama-3.3-70b-versatile) |
-| Google Calendar API | Takvim entegrasyonu |
-| Gmail API | Mail entegrasyonu |
-| pycaw | Ses kontrolü |
-| keyboard | Global kısayol & medya tuşları |
-| psutil | Sistem bilgisi |
-| pygetwindow / pyautogui | Pencere yönetimi |
-| python-dotenv | API key yönetimi |
+- Dosya ve klasör arama/açma
+- Dosyaları kalıcı silmek yerine Windows Çöp Kutusu'na taşıma
+- Küçük metin ve kod dosyalarını salt okunur inceleme
+- Uygulama açma ve kapatma
+- Ses ve medya kontrolü
+- Web, YouTube ve Spotify işlemleri
+- Sistem durumu ve tanılama ekranı
 
----
+### Google entegrasyonları
 
-## 📁 Proje Yapısı
+- Gmail listeleme, arama ve içerik okuma
+- Açık kullanıcı onayıyla e-posta gönderme
+- Google Takvim etkinliklerini okuma
+- Açık kullanıcı onayıyla etkinlik oluşturma, güncelleme ve silme
 
-```
-ai-desktop-assistant/
-├── main.py                    # Giriş noktası, FloatingButton
-├── HekoAI.exe                 # Derlenmiş uygulama
-├── credentials.json           # Google OAuth kimlik bilgileri
-├── assets/
-│   └── arka_plan_3.jpg        # Arka plan görseli
-├── core/
-│   ├── router.py              # Intent yönlendirme
-│   ├── worker.py              # API thread (QThread)
-│   ├── intent_detector.py     # Niyet tespiti
-│   └── daily_motivation.py    # Günlük motivasyon
-├── ui/
-│   ├── chat_window.py         # Ana chat arayüzü
-│   ├── settings_window.py     # Ayarlar penceresi
-│   └── history_window.py      # Geçmiş penceresi
-├── services/
-│   ├── llm_client.py          # Groq API istemcisi
-│   ├── calendar_reader.py     # Google Calendar
-│   ├── gmail_reader.py        # Gmail entegrasyonu
-│   ├── web_controller.py      # Web & site kontrolü
-│   ├── app_launcher.py        # Uygulama aç/kapat, ses, medya
-│   ├── pc_controller.py       # Dosya yönetimi
-│   └── system_info.py         # CPU, RAM, batarya
-├── memory/
-│   ├── context_manager.py     # Konuşma geçmişi
-│   ├── user_memory.py         # Kullanıcı hafızası
-│   ├── history.json           # Geçmiş verisi
-│   └── token.json             # Google OAuth token
-└── utils/
-    ├── config.py              # Global ayarlar
-    └── startup.py             # Windows başlangıç yönetimi
-```
+### Arayüz
 
----
+- Yeniden boyutlandırılabilir ve tam ekran olabilen çerçevesiz pencere
+- Türkiye saatine bağlı hareketli kaos temalı arka plan
+- Bekleme, çalışma ve uyarı durumlarına tepki veren masaüstü karakteri
+- Mesaj arama, geçmiş, hafıza, ayarlar ve kontrol merkezi pencereleri
+- Windows açılışında otomatik başlatma seçeneği
 
-## ⚙️ Kurulum
+## Sistem gereksinimleri
 
-### 1. Repoyu klonla
-```bash
-git clone https://github.com/Hekim029/AI-Asistan-ChatBot.git
-cd AI-Asistan-ChatBot
-```
+- Windows 10 veya Windows 11
+- Python 3.11 veya üzeri
+- İnternet bağlantısı (Groq, hava durumu ve Google özellikleri için)
+- İsteğe bağlı mikrofon
+- İsteğe bağlı Ollama ve yerel model
 
-### 2. Sanal ortam oluştur
-```bash
+## Kurulum
+
+Depoyu klonladıktan sonra proje klasöründe:
+
+```powershell
 python -m venv venv
-venv\Scripts\activate
+venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-### 3. Bağımlılıkları yükle
-```bash
-pip install -r requirements.txt
+Proje kökünde `.env` dosyası oluştur:
+
+```env
+GROQ_API_KEY=groq_api_anahtarin
+YOUTUBE_API_KEY=istege_bagli_youtube_anahtarin
 ```
 
-### 4. API anahtarını ayarla
-`.env` dosyası oluştur:
-```
-GROQ_API_KEY=your_api_key_here
-```
-> Ücretsiz API anahtarı için: [console.groq.com](https://console.groq.com)
+Uygulamayı çalıştır:
 
-### 5. Google API kurulumu (opsiyonel)
-- [Google Cloud Console](https://console.cloud.google.com) üzerinden proje oluştur
-- Calendar API ve Gmail API'yi etkinleştir
-- OAuth 2.0 kimlik bilgilerini indir → `credentials.json` olarak kaydet
-- İlk çalıştırmada tarayıcıda Google girişi yapılır, `token.json` otomatik oluşur
-
-### 6. Çalıştır
-```bash
-python main.py
+```powershell
+python .\main.py
 ```
 
-### 7. nircmd kurulumu (ses kontrolü için)
-- [nirsoft.net/utils/nircmd.html](https://www.nirsoft.net/utils/nircmd.html) adresinden indir
-- `nircmd.exe`'yi proje ana klasörüne koy (`main.py`'in yanına)
+> `.env`, Google kimlik dosyaları ve `memory/` altındaki kişisel veriler Git'e
+> gönderilmez. Bu dosyaları hiçbir commit'e elle eklemeyin.
 
----
+## İsteğe bağlı Ollama kurulumu
 
-## 🎮 Kullanım Örnekleri
+Yerel model, Groq kota veya bağlantı sorunu yaşadığında normal sohbet için geri
+dönüş sağlayabilir. Ollama kurulumu zorunlu değildir.
 
-| Komut | Eylem |
-|-------|-------|
-| `"spotify aç"` | Spotify'ı başlatır |
-| `"spotify kapat"` | Spotify'ı kapatır |
-| `"ses 50 yap"` | Ses seviyesini %50'ye ayarlar |
-| `"sonraki şarkı"` | Sonraki parçaya geçer |
-| `"masaüstü 2209A klasörünü aç"` | İlgili klasörü açar |
-| `"indirmeleri listele"` | İndirmeler klasörünü listeler |
-| `"bayrama kaç gün var"` | Takvimden kontrol eder |
-| `"okunmamış maillerim"` | Gmail'den getirir |
-| `"youtube'da lo-fi ara"` | YouTube'da arama yapar |
-| `"sistem durumu"` | CPU, RAM, pil bilgisi |
+Donanımı daha sınırlı sistemler için:
 
----
+```powershell
+ollama pull qwen3:4b
+```
 
-## 🗺️ Yol Haritası
+`.env` dosyasına ekle:
 
-- [x] Temel sohbet & Groq API
-- [x] Intent tespiti
-- [x] Mod & tema sistemi
-- [x] Mesaj arama & geçmiş ekranı
-- [x] Google Calendar entegrasyonu
-- [x] Gmail entegrasyonu
-- [x] Web arama & site açma
-- [x] Uygulama aç/kapat
-- [x] Ses & medya kontrolü
-- [x] Dosya/klasör yönetimi
-- [x] Sistem bilgisi
-- [x] HekoAI.exe build
-- [ ] Windows otomatik başlangıç
-- [ ] Mail içeriği okuma
-- [ ] Hava durumu
+```env
+OLLAMA_MODEL=qwen3:4b
+OLLAMA_URL=http://127.0.0.1:11434
+```
 
----
+Bağlantıyı kontrol et:
 
-## 📄 Lisans
+```powershell
+ollama list
+Invoke-RestMethod http://127.0.0.1:11434/api/tags
+```
 
-MIT License — dilediğin gibi kullan, geliştir.
+Tamamen yerel kullanım isteniyorsa Windows kullanıcı ortam değişkenlerine
+`OLLAMA_NO_CLOUD=1` eklenebilir.
 
----
+## Google kurulumu
 
-<p align="center">Made with ❤️ by <a href="https://github.com/Hekim029">Hekim029</a></p>
+1. Google Cloud Console'da bir OAuth masaüstü istemcisi oluştur.
+2. İndirilen dosyayı proje köküne `credentials.json` adıyla yerleştir.
+3. İlk Gmail veya Takvim kullanımında tarayıcıdan izin ver.
+4. Oluşan erişim bilgileri `memory/token.json` altında yerel olarak saklanır.
+
+`credentials.json` ve `memory/token.json` Git tarafından yok sayılır.
+
+## Örnek komutlar
+
+```text
+20 dakika sonra fırına bakmamı hatırlat
+yarın Ankara'da hava nasıl?
+görev ekle: proje raporunu tamamla
+alışveriş görevini tamamla
+not al: arayüzün ana rengi mor olacak
+proje hakkındaki notlarımı göster
+günlük özetimi ver
+benim hakkımda ne biliyorsun?
+diğer pencerede ne oldu
+dosya oku: C:\Projeler\ornek\main.py
+okunmamış maillerimi göster
+yarın saat 14.00'e proje toplantısı ekle
+masaüstündeki rapor.txt dosyasını sil
+Spotify'ı aç
+sesi yüzde 35 yap
+```
+
+## Çoklu sohbet kullanımı
+
+- Üst çubuktaki `+` düğmesi yeni bir sohbet oluşturur.
+- `▦` düğmesi Sohbet Oturumları panelini açar.
+- Kapatılan sohbetler silinmez; panelde gizli olarak kalır.
+- `Aç` düğmesi oturumu aynı geçmişle geri getirir.
+- `Adlandır` düğmesiyle oturumlara `Kodlama`, `Araştırma` veya `Rapor` gibi
+  kalıcı isimler verilebilir.
+- `diğer pencerede ne oldu` komutu diğer oturumların son sonuçlarını getirir.
+
+## Güvenlik modeli
+
+Aşağıdaki işlemler iki aşamalı onay gerektirir:
+
+- Dosya silme
+- E-posta gönderme
+- Takvim etkinliği oluşturma, güncelleme veya silme
+- Konuşma geçmişini temizleme
+- Kalıcı kullanıcı hafızasından bilgi silme
+
+İşlem özeti gösterildikten sonra kullanıcı beş dakika içinde ayrıca onay vermelidir.
+Dosya silme işlemleri Windows Çöp Kutusu üzerinden geri alınabilir biçimde yapılır.
+
+Dosya okuyucu şu içerikleri engeller:
+
+- `.env`, `credentials.json`, `token.json` ve özel anahtar dosyaları
+- İkili dosyalar
+- Desteklenmeyen uzantılar
+- 2 MB üzerindeki dosyalar
+
+## Test
+
+Tüm regresyon testleri:
+
+```powershell
+venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Hızlı sözdizimi kontrolü:
+
+```powershell
+venv\Scripts\python.exe -m compileall -q main.py ui core services memory tests
+```
+
+## Windows EXE oluşturma
+
+```powershell
+venv\Scripts\python.exe -m PyInstaller --noconfirm HekoAI.spec
+```
+
+Çıktı `dist/HekoAI.exe` altında oluşur. API anahtarları, Google kimlik bilgileri
+ve kişisel hafıza EXE içine paketlenmez.
+
+## Proje yapısı
+
+```text
+assets/       arka planlar ve masaüstü karakter görselleri
+core/         yönlendirme, araç şemaları, güvenlik ve ortak durum
+memory/       çalışma sırasında oluşan yerel kişisel veriler
+services/     Groq, Ollama, Google, görev, hava ve sistem servisleri
+tests/        güvenlik ve servis regresyon testleri
+ui/           sohbet, ayarlar, oturum, hafıza ve kontrol pencereleri
+utils/        yapılandırma ve Windows başlangıç yardımcıları
+main.py       uygulama giriş noktası ve pencere yöneticisi
+```
+
+## Yol haritası
+
+Planlanan sağlamlaştırma çalışmaları [ROADMAP.md](ROADMAP.md) dosyasında tutulur.
+Öne çıkan sonraki adımlar:
+
+- Eşzamanlı dosya yazma kilitleri
+- Uzun işlerde iptal ve ayrıntılı ilerleme takibi
+- PDF ve Word içerik okuma
+- Kullanıcı izinli ekran görüntüsü farkındalığı
+- Ollama model seçiminin Ayarlar ekranına alınması
+
+## Tanılama ve günlükler
+
+Ayarlar içindeki Sistem Kontrolü ekranı gerekli servisleri denetler. Uygulama
+hataları yerel `memory/heko.log` dosyasına yazılır ve Git'e eklenmez.
+
+## Lisans
+
+Bu depo için henüz bir lisans seçilmedi. Herkese açık dağıtımdan önce uygun bir
+`LICENSE` dosyası eklenmesi önerilir.
