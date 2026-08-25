@@ -16,7 +16,8 @@ def listen_and_transcribe(duration: int = 3, sample_rate: int = 16000) -> str | 
                       channels=1, dtype='int16')
         sd.wait()
 
-        tmp_path = os.path.join(tempfile.gettempdir(), "heko_audio.wav")
+        fd, tmp_path = tempfile.mkstemp(prefix="heko_audio_", suffix=".wav")
+        os.close(fd)
         wav.write(tmp_path, sample_rate, audio)
 
         with open(tmp_path, "rb") as audio_file:
@@ -35,6 +36,7 @@ def listen_and_transcribe(duration: int = 3, sample_rate: int = 16000) -> str | 
                     "temperature": "0",
                 },
                 timeout=30,
+                allow_redirects=False,
             )
         response.raise_for_status()
         return (response.json().get("text") or "").strip() or None

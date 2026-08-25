@@ -3,9 +3,14 @@ import base64
 import tempfile
 import time
 import unittest
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from pypdf import PdfWriter
+from pypdf.generic import (
+    DecodedStreamObject, DictionaryObject, NameObject,
+)
 
 from core.tools import TOOLS, ToolExecutor
 from core.router import Router
@@ -13,14 +18,27 @@ from core.local_intents import clarification_for, detect_local_tool, pending_slo
 from services.shared_workspace import SharedWorkspace
 from services.file_reader import read_text_file
 from services.local_model import LocalModelClient
+from services.project_workspace import ProjectWorkspace
 from services.session_registry import SessionRegistry
 from memory.user_memory import UserMemory
-from services.llm_client import LLMClient
+from services.llm_client import LLMClient, OperationCancelled
+from core.worker import ResponseWorker
 from services.reminder_manager import ReminderManager
 from services.task_manager import TaskManager
 from services.daily_briefing import DailyBriefingService
 from services.weather_service import describe_weather_code, get_weather
 from services.gmail_reader import _decode_message_part
+from ui.project_diff_window import diff_line_kind, diff_stats
+from ui.chat_window import response_for_display
+from services.document_reader import read_document, _validate_docx_archive
+from services.calendar_reader import _validated_datetime
+from services.security import (
+    clean_single_line,
+    contains_sensitive_data,
+    redact_sensitive_data,
+    validate_https_url,
+    validate_loopback_url,
+)
 
 
 class DummyContext:
@@ -355,7 +373,7 @@ class FileReaderTests(unittest.TestCase):
 
 
 class LocalModelTests(unittest.TestCase):
-    @patch("services.local_model.requests.post")
+    @patch("services.local_model.requests.Session.post")
     def test_optional_ollama_client_returns_local_answer(self, post):
         response = post.return_value
         response.raise_for_status.return_value = None
@@ -681,6 +699,455 @@ class ForcedToolRoutingTests(unittest.TestCase):
         self.assertIsNone(
             LLMClient._forced_tool_for_first_turn(messages)
         )
+
+    def test_explicit_new_code_file_forces_project_update_tool(self):
+        messages = [{
+            "role": "user",
+            "content": (
+                "services/deneme.py adında yeni bir dosya oluştur. "
+                "İçine print('Merhaba Heko') yaz ve önce göster."
+            ),
+        }]
+        self.assertEqual(
+            "update_project_file",
+            LLMClient._forced_tool_for_first_turn(messages),
+        )
+
+    def test_code_path_write_exposes_only_project_file_tools(self):
+        tools = LLMClient._relevant_tools([{
+            "role": "user",
+            "content": "services/app.py dosyasını değiştir ve diff göster",
+        }])
+        names = {tool["function"]["name"] for tool in tools}
+        self.assertIn("update_project_file", names)
+        self.assertIn("read_project_file", names)
+        self.assertNotIn("read_text_file", names)
+
+
+class ProjectWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.workspace = ProjectWorkspace(
+            str(self.root), str(self.root / ".test_backups")
+        )
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_project_paths_cannot_escape_root(self):
+        with self.assertRaisesRegex(ValueError, "dışına"):
+            self.workspace.read_file("../secret.txt")
+
+    def test_sensitive_project_file_is_blocked(self):
+        (self.root / ".env").write_text("TOKEN=secret", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Hassas"):
+            self.workspace.read_file(".env")
+
+    def test_existing_file_requires_matching_hash(self):
+        target = self.root / "app.py"
+        target.write_text("print('old')\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "önce okunmalı"):
+            self.workspace.preview_change("app.py", "print('new')\n")
+        item = self.workspace.read_file("app.py")
+        preview = self.workspace.preview_change(
+            "app.py", "print('new')\n", item["sha256"]
+        )
+        self.assertIn("-print('old')", preview["diff"])
+        self.assertIn("+print('new')", preview["diff"])
+
+    def test_change_is_only_written_when_apply_is_called(self):
+        target = self.root / "app.py"
+        target.write_text("old\n", encoding="utf-8")
+        item = self.workspace.read_file("app.py")
+        self.workspace.preview_change("app.py", "new\n", item["sha256"])
+        self.assertEqual("old\n", target.read_text(encoding="utf-8"))
+        applied = self.workspace.apply_change("app.py", "new\n", item["sha256"])
+        self.assertEqual("new\n", target.read_text(encoding="utf-8"))
+        self.assertTrue(applied["backup"])
+
+    def test_project_commands_have_offline_routes(self):
+        self.assertEqual(
+            ("list_project_files", {"query": "", "limit": 120}),
+            detect_local_tool("proje dosyalarını listele"),
+        )
+        self.assertEqual(
+            ("read_project_file", {"path": "services/app.py"}),
+            detect_local_tool("proje dosyası oku: services/app.py"),
+        )
+
+    def test_explicit_new_project_file_is_offline_and_preserves_content(self):
+        command = (
+            'services/deneme.py adında yeni bir dosya oluştur. '
+            'İçine print("Merhaba Heko") yaz ve değişikliği önce göster.'
+        )
+        self.assertEqual(
+            (
+                "update_project_file",
+                {
+                    "path": "services/deneme.py",
+                    "content": 'print("Merhaba Heko")\n',
+                    "expected_sha256": "",
+                },
+            ),
+            detect_local_tool(command),
+        )
+
+    def test_exact_chat_command_reaches_real_confirmation_without_model(self):
+        command = (
+            'services/deneme.py adında yeni bir dosya oluştur. '
+            'İçine print("Merhaba Heko") yaz ve değişikliği önce göster.'
+        )
+        router = Router.__new__(Router)
+        router.context = DummyContextWithMessages()
+        router.executor = ToolExecutor(DummyMemory(), router.context)
+        router.executor._project_workspace = lambda: self.workspace
+        router.workspace = unittest.mock.Mock()
+        router.session_id = "test"
+        router.last_tools_used = []
+        router._pending_local_slot = None
+
+        response = router.get_response(command)
+
+        self.assertIn("ONAY_GEREKLİ", response)
+        self.assertTrue(router.executor.has_pending_action())
+        self.assertFalse((self.root / "services" / "deneme.py").exists())
+
+    def test_negative_project_creation_is_not_routed(self):
+        self.assertIsNone(
+            detect_local_tool(
+                "services/deneme.py dosyasını sakın oluşturma, içine test yazma"
+            )
+        )
+
+    def test_project_delete_command_routes_to_dedicated_tool(self):
+        self.assertEqual(
+            ("delete_project_file", {"path": "services/deneme.py"}),
+            detect_local_tool("şimdi de services/deneme.py dosyasını sil"),
+        )
+
+    def test_project_delete_uses_confirmation_and_recycle_bin(self):
+        target = self.root / "services" / "deneme.py"
+        target.parent.mkdir()
+        target.write_text("print('test')\n", encoding="utf-8")
+        executor = ToolExecutor(DummyMemory(), DummyContext())
+        executor._project_workspace = lambda: self.workspace
+
+        with patch(
+            "send2trash.send2trash",
+            side_effect=lambda path: Path(path).unlink(),
+        ) as trash:
+            response = executor.execute(
+                "delete_project_file", {"path": "services/deneme.py"}
+            )
+            self.assertIn("ONAY_GEREKLİ", response)
+            self.assertTrue(target.exists())
+            confirmed = executor.execute("confirm_pending_action", {})
+
+        trash.assert_called_once_with(str(target.resolve()))
+        self.assertFalse(target.exists())
+        self.assertIn("Çöp Kutusu", confirmed)
+
+    def test_invalid_project_delete_never_creates_pending_action(self):
+        executor = ToolExecutor(DummyMemory(), DummyContext())
+        executor._project_workspace = lambda: self.workspace
+        response = executor.execute(
+            "delete_project_file", {"path": "../outside.py"}
+        )
+        self.assertIn("Geçersiz proje silme", response)
+        self.assertFalse(executor.has_pending_action())
+
+    def test_update_project_file_waits_for_confirmation(self):
+        target = self.root / "app.py"
+        target.write_text("old\n", encoding="utf-8")
+        item = self.workspace.read_file("app.py")
+        executor = ToolExecutor(DummyMemory(), DummyContext())
+        executor._project_workspace = lambda: self.workspace
+        result = executor.execute("update_project_file", {
+            "path": "app.py", "content": "new\n",
+            "expected_sha256": item["sha256"],
+        })
+        self.assertIn("ONAY_GEREKLİ", result)
+        self.assertEqual("old\n", target.read_text(encoding="utf-8"))
+        info = executor.pending_action_info()
+        self.assertEqual("update_project_file", info["tool_name"])
+        self.assertEqual("app.py", info["project_change"]["path"])
+        self.assertIn("+new", info["project_change"]["diff"])
+        self.assertNotIn("+new", info["summary"])
+        executor.execute("confirm_pending_action", {})
+        self.assertEqual("new\n", target.read_text(encoding="utf-8"))
+
+    def test_invalid_project_change_does_not_create_pending_action(self):
+        executor = ToolExecutor(DummyMemory(), DummyContext())
+        executor._project_workspace = lambda: self.workspace
+
+        result = executor.execute("update_project_file", {
+            "path": "../outside.py",
+            "content": "print('unsafe')\n",
+            "expected_sha256": "",
+        })
+
+        self.assertIn("Geçersiz proje değişikliği", result)
+        self.assertFalse(executor.has_pending_action())
+
+
+class SecurityBoundaryTests(unittest.TestCase):
+    def test_secret_is_detected_and_redacted(self):
+        value = "api_key=abcdefgh123456789"
+        self.assertTrue(contains_sensitive_data(value))
+        redacted = redact_sensitive_data(value)
+        self.assertNotIn("abcdefgh123456789", redacted)
+        self.assertIn("GİZLENDİ", redacted)
+
+    def test_ollama_url_is_loopback_only(self):
+        self.assertEqual(
+            "http://127.0.0.1:11434",
+            validate_loopback_url("http://127.0.0.1:11434"),
+        )
+        for unsafe in (
+            "http://192.168.1.20:11434",
+            "https://example.com:11434",
+            "file:///tmp/ollama",
+        ):
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                validate_loopback_url(unsafe)
+
+    def test_browser_url_rejects_non_https_and_private_ip(self):
+        self.assertEqual(
+            "https://example.com/path",
+            validate_https_url("https://example.com/path"),
+        )
+        for unsafe in ("http://example.com", "https://127.0.0.1/admin"):
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                validate_https_url(unsafe)
+
+    def test_header_injection_control_characters_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "kontrol karakteri"):
+            clean_single_line(
+                "normal@example.com\r\nBcc: attacker@example.com",
+                name="E-posta",
+            )
+
+    def test_remote_ollama_configuration_is_disabled(self):
+        client = LocalModelClient("qwen3:8b", "http://10.0.0.4:11434")
+        self.assertFalse(client.enabled)
+        self.assertIn("localhost", client.configuration_error)
+
+    def test_router_refuses_to_persist_or_send_secrets(self):
+        router = Router.__new__(Router)
+        router.context = DummyContextWithMessages()
+
+        response = router.get_response("api_key=abcdefgh123456789")
+
+        self.assertIn("hassas", response)
+        self.assertEqual([], router.context.messages)
+
+    def test_app_launcher_never_uses_shell_true(self):
+        source = Path("services/app_launcher.py").read_text(encoding="utf-8")
+        self.assertNotIn("shell=True", source)
+
+    def test_calendar_iso_datetime_validation(self):
+        text, parsed = _validated_datetime(
+            "2026-08-25T14:30:00+03:00", field_name="Başlangıç"
+        )
+        self.assertEqual("2026-08-25T14:30:00+03:00", text)
+        self.assertEqual(14, parsed.hour)
+        with self.assertRaisesRegex(ValueError, "ISO-8601"):
+            _validated_datetime("yarın öğlen", field_name="Başlangıç")
+
+    def test_oauth_encryption_failure_never_writes_plaintext_token(self):
+        import services.google_auth as google_auth
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_path = Path(temp_dir) / "token.dat"
+            with patch.object(google_auth, "TOKEN_PATH", token_path), patch.object(
+                google_auth, "_protect", side_effect=OSError("DPAPI unavailable")
+            ):
+                with self.assertRaisesRegex(RuntimeError, "düz metin"):
+                    google_auth._save_token_info({"refresh_token": "secret"})
+            self.assertFalse(token_path.exists())
+
+
+class ProjectDiffViewTests(unittest.TestCase):
+    def test_diff_line_types_distinguish_headers_and_changes(self):
+        self.assertEqual("header", diff_line_kind("+++ b/app.py"))
+        self.assertEqual("header", diff_line_kind("--- a/app.py"))
+        self.assertEqual("addition", diff_line_kind("+print('new')"))
+        self.assertEqual("deletion", diff_line_kind("-print('old')"))
+        self.assertEqual("hunk", diff_line_kind("@@ -1 +1 @@"))
+
+    def test_diff_stats_ignore_file_headers(self):
+        diff = (
+            "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+            "-old\n+new\n context\n"
+        )
+        self.assertEqual((1, 1), diff_stats(diff))
+
+
+class FriendlyResponseTests(unittest.TestCase):
+    def test_internal_approval_protocol_is_hidden(self):
+        raw = (
+            "ONAY_GEREKLİ: İşlem henüz yapılmadı. "
+            "confirm_pending_action aracını çağır."
+        )
+        display = response_for_display(
+            raw, {"tool_name": "delete_project_file"}
+        )
+        self.assertNotIn("ONAY_GEREKLİ", display)
+        self.assertNotIn("confirm_pending_action", display)
+        self.assertIn("Çöp Kutusu", display)
+
+    def test_project_hash_is_kept_out_of_visible_message(self):
+        raw = (
+            "PROJE DOSYASI: services/deneme.py\n"
+            "SHA256: abcdef123456\nBOYUT: 22 bayt\n\nprint('Merhaba')"
+        )
+        display = response_for_display(raw)
+        self.assertNotIn("SHA256", display)
+        self.assertNotIn("abcdef123456", display)
+        self.assertIn("services/deneme.py", display)
+        self.assertIn("print('Merhaba')", display)
+
+
+class DocumentReaderTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def _write_docx(path: Path, paragraphs: list[str], table_row=None):
+        namespace = (
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        )
+        body = []
+        for text in paragraphs:
+            body.append(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>")
+        if table_row:
+            cells = "".join(
+                f"<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"
+                for text in table_row
+            )
+            body.append(f"<w:tbl><w:tr>{cells}</w:tr></w:tbl>")
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<w:document xmlns:w="{namespace}"><w:body>'
+            + "".join(body)
+            + "</w:body></w:document>"
+        )
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("word/document.xml", xml.encode("utf-8"))
+
+    def test_docx_text_and_tables_are_extracted(self):
+        path = self.root / "rapor.docx"
+        self._write_docx(
+            path,
+            ["Güvenli Rapor", "Word belgesi başarıyla okundu."],
+            table_row=["Durum", "Tamam"],
+        )
+
+        result = read_document(str(path))
+
+        self.assertEqual("Word (DOCX)", result["kind"])
+        self.assertIn("Güvenli Rapor", result["content"])
+        self.assertIn("Durum | Tamam", result["content"])
+
+    def test_pdf_text_is_extracted(self):
+        path = self.root / "rapor.pdf"
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        font_ref = writer._add_object(font)
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({
+                NameObject("/F1"): font_ref,
+            })
+        })
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT /F1 12 Tf 72 720 Td (Merhaba PDF) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        with path.open("wb") as handle:
+            writer.write(handle)
+
+        result = read_document(str(path))
+
+        self.assertEqual("PDF", result["kind"])
+        self.assertIn("Merhaba PDF", result["content"])
+        self.assertEqual(1, result["unit_count"])
+
+    def test_docx_zip_bomb_ratio_is_rejected(self):
+        path = self.root / "bomb.docx"
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("word/document.xml", b"0" * (2 * 1024 * 1024))
+        with self.assertRaisesRegex(ValueError, "sıkıştırma oranı"):
+            _validate_docx_archive(path)
+
+    def test_secret_bearing_document_is_rejected(self):
+        path = self.root / "secret.docx"
+        self._write_docx(path, ["api_key=abcdefgh123456789"])
+        with self.assertRaisesRegex(ValueError, "gizli bilgi"):
+            read_document(str(path))
+
+    def test_document_command_has_offline_route(self):
+        path = str(self.root / "rapor.docx")
+        self.assertEqual(
+            ("read_document", {"path": path}),
+            detect_local_tool(f'word oku: "{path}"'),
+        )
+
+
+class CooperativeCancellationTests(unittest.TestCase):
+    def test_cancelled_router_does_not_persist_user_message(self):
+        router = Router.__new__(Router)
+        router.context = DummyContextWithMessages()
+
+        with self.assertRaises(OperationCancelled):
+            router.get_response("uzun bir araştırma yap", is_cancelled=lambda: True)
+
+        self.assertEqual([], router.context.messages)
+
+    def test_cancellation_prevents_next_tool_execution(self):
+        client = LLMClient()
+        client._call_api = lambda *args, **kwargs: {
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "function": {
+                        "name": "get_time",
+                        "arguments": "{}",
+                    },
+                }],
+            }
+        }
+        checks = iter((False, True))
+        executor = unittest.mock.Mock()
+
+        with self.assertRaises(OperationCancelled):
+            client.chat(
+                [{"role": "user", "content": "saat kaç"}],
+                "",
+                executor,
+                is_cancelled=lambda: next(checks),
+            )
+
+        executor.execute.assert_not_called()
+
+    def test_rate_limit_wait_is_interruptible(self):
+        with self.assertRaises(OperationCancelled):
+            LLMClient._interruptible_wait(30, lambda: True)
+
+    def test_worker_exposes_cancelled_state(self):
+        worker = ResponseWorker(object(), "test")
+        self.assertFalse(worker.is_cancelled)
+        worker.cancel()
+        self.assertTrue(worker.is_cancelled)
 
 
 if __name__ == "__main__":

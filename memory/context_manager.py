@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 from utils.config import MEMORY_DIR
+from services.security import redact_sensitive_data, secure_write_json, safe_error
 
 SUMMARY_SYSTEM_PROMPT = """Sen bir konuşma özetleyicisisin.
 Verilen konuşma geçmişini kısa ve bilgi kaybetmeden özetle.
@@ -139,12 +140,15 @@ class ContextManager:
                 "Content-Type":  "application/json"
             }
 
-            response = requests.post(config.API_URL, headers=headers, json=payload, timeout=10)
+            response = requests.post(
+                config.API_URL, headers=headers, json=payload, timeout=10,
+                allow_redirects=False,
+            )
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"].strip()
 
         except Exception as e:
-            print(f"⚠️ LLM özetleme başarısız, basit özete geçiliyor: {e}")
+            print(f"[UYARI] LLM özeti başarısız, basit özete geçiliyor: {safe_error(e)}")
             return self._simple_summarize(messages)
 
     def _simple_summarize(self, messages: list[dict]) -> str:
@@ -164,10 +168,16 @@ class ContextManager:
                 "history": self._history,
                 "summary": self._summary
             }
-            with open(self._save_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            persistent = {
+                "history": [
+                    {**message, "content": redact_sensitive_data(message.get("content", ""))}
+                    for message in data["history"]
+                ],
+                "summary": redact_sensitive_data(data["summary"]),
+            }
+            secure_write_json(self._save_path, persistent)
         except Exception as e:
-            print(f"❌ Geçmiş kaydedilirken hata: {e}")
+            print(f"[HATA] Geçmiş kaydedilemedi: {safe_error(e)}")
 
     def _load(self):
         if not os.path.exists(self._save_path):
@@ -192,6 +202,6 @@ class ContextManager:
             self._summary = data.get("summary", "")
 
         except (json.JSONDecodeError, Exception) as e:
-            print(f"⚠️ Geçmiş yüklenirken hata: {e}")
+            print(f"[UYARI] Geçmiş yüklenemedi: {safe_error(e)}")
             self._history = []
             self._summary = ""

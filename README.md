@@ -43,6 +43,11 @@ takvim değişiklikleri gibi riskli işlemler kullanıcı onayı olmadan uygulan
 - Dosya ve klasör arama/açma
 - Dosyaları kalıcı silmek yerine Windows Çöp Kutusu'na taşıma
 - Küçük metin ve kod dosyalarını salt okunur inceleme
+- Proje dosyalarını göreli yollarla güvenli listeleme ve okuma
+- Kod değişikliklerinde diff önizlemesi, açık onay ve otomatik yedek
+- Kod değişiklikleri için renkli, kopyalanabilir ve süreli görsel diff penceresi
+- Proje dosyalarını proje kökü doğrulaması ve açık onayla Çöp Kutusu'na taşıma
+- PDF ve DOCX belgelerinden güvenli, salt okunur metin çıkarma
 - Uygulama açma ve kapatma
 - Ses ve medya kontrolü
 - Web, YouTube ve Spotify işlemleri
@@ -61,6 +66,8 @@ takvim değişiklikleri gibi riskli işlemler kullanıcı onayı olmadan uygulan
 - Türkiye saatine bağlı hareketli kaos temalı arka plan
 - Bekleme, çalışma ve uyarı durumlarına tepki veren masaüstü karakteri
 - Mesaj arama, geçmiş, hafıza, ayarlar ve kontrol merkezi pencereleri
+- Uzun yanıtlarda işlem aşaması, geçen süre ve güvenli durdurma düğmesi
+- İç araç adlarını ve SHA karmalarını kullanıcıdan gizleyen sade sonuç metinleri
 - Windows açılışında otomatik başlatma seçeneği
 
 ## Sistem gereksinimleri
@@ -105,13 +112,13 @@ dönüş sağlayabilir. Ollama kurulumu zorunlu değildir.
 Donanımı daha sınırlı sistemler için:
 
 ```powershell
-ollama pull qwen3:4b
+ollama pull qwen3:8b
 ```
 
 `.env` dosyasına ekle:
 
 ```env
-OLLAMA_MODEL=qwen3:4b
+OLLAMA_MODEL=qwen3:8b
 OLLAMA_URL=http://127.0.0.1:11434
 ```
 
@@ -147,6 +154,9 @@ günlük özetimi ver
 benim hakkımda ne biliyorsun?
 diğer pencerede ne oldu
 dosya oku: C:\Projeler\ornek\main.py
+proje dosyalarını listele
+services/llm_client.py dosyasını incele
+services/example.py dosyasını oluştur ve önce değişikliği göster
 okunmamış maillerimi göster
 yarın saat 14.00'e proje toplantısı ekle
 masaüstündeki rapor.txt dosyasını sil
@@ -173,16 +183,29 @@ Aşağıdaki işlemler iki aşamalı onay gerektirir:
 - Takvim etkinliği oluşturma, güncelleme veya silme
 - Konuşma geçmişini temizleme
 - Kalıcı kullanıcı hafızasından bilgi silme
+- Proje dosyasına kod yazma
+- Uygulamayı zorla kapatma
 
 İşlem özeti gösterildikten sonra kullanıcı beş dakika içinde ayrıca onay vermelidir.
 Dosya silme işlemleri Windows Çöp Kutusu üzerinden geri alınabilir biçimde yapılır.
 
-Dosya okuyucu şu içerikleri engeller:
+Ek güvenlik sınırları:
 
-- `.env`, `credentials.json`, `token.json` ve özel anahtar dosyaları
+- `.env`, `credentials.json`, `token.dat`, özel anahtar ve kimlik dosyaları okunmaz
 - İkili dosyalar
 - Desteklenmeyen uzantılar
 - 2 MB üzerindeki dosyalar
+- 20 MB üzerindeki PDF/DOCX belgeleri, şifreli PDF'ler ve makrolu/gömülü DOCX'ler
+- Aşırı sıkıştırılmış veya açıldığında 100 MB sınırını aşan DOCX arşivleri
+- Uygulama ve dosya açmada yürütülebilir dosya/kısayol çalıştırma engellenir
+- Ollama bağlantısı yalnızca bu bilgisayardaki `localhost` adresine izin verir
+- API anahtarı/parola görünen mesajlar modele gönderilmez veya hafızaya yazılmaz
+- Google OAuth yenileme tokenı Windows DPAPI ile kullanıcı hesabına bağlı şifrelenir
+- Kalıcı JSON verileri atomik ve kısıtlı izinli dosya yazımıyla kaydedilir
+- Dış e-posta, dosya ve araç içerikleri model komutu değil, güvenilmeyen veri sayılır
+
+Ayrıntılı tehdit modeli, kalan riskler ve denetim komutları için
+[SECURITY.md](SECURITY.md) belgesine bakın.
 
 ## Test
 
@@ -196,6 +219,14 @@ Hızlı sözdizimi kontrolü:
 
 ```powershell
 venv\Scripts\python.exe -m compileall -q main.py ui core services memory tests
+```
+
+Geliştirici güvenlik araçları ve taramalar:
+
+```powershell
+venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+venv\Scripts\python.exe -m bandit -r core services memory ui utils main.py -x tests
+venv\Scripts\python.exe -m pip_audit --local
 ```
 
 ## Windows EXE oluşturma
@@ -225,9 +256,6 @@ main.py       uygulama giriş noktası ve pencere yöneticisi
 Planlanan sağlamlaştırma çalışmaları [ROADMAP.md](ROADMAP.md) dosyasında tutulur.
 Öne çıkan sonraki adımlar:
 
-- Eşzamanlı dosya yazma kilitleri
-- Uzun işlerde iptal ve ayrıntılı ilerleme takibi
-- PDF ve Word içerik okuma
 - Kullanıcı izinli ekran görüntüsü farkındalığı
 - Ollama model seçiminin Ayarlar ekranına alınması
 

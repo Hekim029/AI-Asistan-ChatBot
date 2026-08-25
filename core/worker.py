@@ -1,4 +1,5 @@
 from PySide6.QtCore import QThread, Signal, QObject
+from services.security import safe_error
 
 
 class ResponseWorker(QThread):
@@ -28,6 +29,10 @@ class ResponseWorker(QThread):
         """İşlemi iptal etmek için bayrak set eder."""
         self._is_cancelled = True
 
+    @property
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
+
     def run(self):
         try:
             if self._is_cancelled:
@@ -37,7 +42,11 @@ class ResponseWorker(QThread):
                 if not self._is_cancelled:
                     self.status_update.emit(text)
 
-            response = self._router.get_response(self._message, on_status=on_status)
+            response = self._router.get_response(
+                self._message,
+                on_status=on_status,
+                is_cancelled=lambda: self._is_cancelled,
+            )
 
             if not self._is_cancelled:
                 self.response_ready.emit(response)
@@ -64,7 +73,7 @@ class MicWorker(QThread):
             text = listen_and_transcribe(duration=5)
             self.text_ready.emit(text or "")
         except Exception as e:
-            print(f"🎙️ Mikrofon Hatası: {e}")
+            print(f"[MIKROFON HATASI] {safe_error(e)}")
             self.text_ready.emit("")
         finally:
             self.finished_listening.emit()

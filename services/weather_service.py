@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import requests
+from services.security import clean_single_line, sanitize_untrusted_text
 
 
 WMO_DESCRIPTIONS = {
@@ -42,6 +43,7 @@ def describe_weather_code(code: int) -> str:
 
 
 def _geocode(city: str) -> dict:
+    city = clean_single_line(city, name="Şehir", max_length=120)
     response = requests.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={
@@ -51,6 +53,7 @@ def _geocode(city: str) -> dict:
             "format": "json",
         },
         timeout=8,
+        allow_redirects=False,
     )
     response.raise_for_status()
     results = response.json().get("results") or []
@@ -78,12 +81,13 @@ def get_weather(city: str, period: str = "today") -> str:
             "forecast_days": 7,
         },
         timeout=10,
+        allow_redirects=False,
     )
     response.raise_for_status()
     data = response.json()
-    display_name = ", ".join(
+    display_name = sanitize_untrusted_text(", ".join(
         part for part in (location.get("name"), location.get("admin1")) if part
-    )
+    ), 300)
 
     if period == "now":
         current = data["current"]

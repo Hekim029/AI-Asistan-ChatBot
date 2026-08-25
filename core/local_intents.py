@@ -10,8 +10,100 @@ def _normalize(text: str) -> str:
     return value.strip(" .?!,;:")
 
 
+def _detect_new_project_file(message: str) -> tuple[str, dict] | None:
+    """Açık yeni kod dosyası komutunu model/kota gerektirmeden hazırlar."""
+    raw = str(message or "").strip()
+    if not raw:
+        return None
+    folded = raw.casefold()
+    if any(
+        phrase in folded
+        for phrase in (
+            "oluşturma", "oluşturmanı istemiyorum", "sakın oluştur",
+            "yazma", "yazmanı istemiyorum",
+        )
+    ):
+        return None
+
+    path_pattern = r"(?P<path>(?:[\w.@+\-]+[\\/])*[\w.@+\-]+\.[A-Za-z0-9]{1,10})"
+    natural = re.search(
+        path_pattern
+        + r"\s+(?:adında\s+)?(?:yeni\s+bir\s+)?dosya(?:sını)?\s+oluştur",
+        raw,
+        re.I,
+    )
+    explicit = re.search(
+        r"proje\s+dosyası\s+oluştur\s*:\s*" + path_pattern,
+        raw,
+        re.I,
+    )
+    match = natural or explicit
+    if not match:
+        return None
+
+    fenced = re.search(r"```(?:[A-Za-z0-9_+.-]+)?\s*\n?(.*?)```", raw, re.S)
+    if fenced:
+        content = fenced.group(1).strip("\r\n")
+    else:
+        inline = re.search(
+            r"\biçine\s+(.+?)\s+yaz(?:\s+ve\b|[.!?](?:\s|$)|$)",
+            raw,
+            re.I | re.S,
+        )
+        content = inline.group(1).strip() if inline else ""
+    if not content:
+        return None
+
+    return "update_project_file", {
+        "path": match.group("path").replace("\\", "/"),
+        "content": content.rstrip() + "\n",
+        "expected_sha256": "",
+    }
+
+
+def _detect_project_file_delete(message: str) -> tuple[str, dict] | None:
+    """Göreli proje yolu verilen açık silme emrini güvenli araca yönlendirir."""
+    raw = str(message or "").strip()
+    folded = raw.casefold()
+    if any(
+        phrase in folded
+        for phrase in (
+            "silme", "silmeni istemiyorum", "silmek istemiyorum", "sakın sil",
+        )
+    ):
+        return None
+    match = re.search(
+        r"(?:^|\s)(?P<path>(?:[\w.@+\-]+[\\/])+[\w.@+\-]+\."
+        r"[A-Za-z0-9]{1,10})\s+dosyasını\s+"
+        r"(?:sil|çöp\s+kutusuna\s+taşı)(?:\s|[.!?]|$)",
+        raw,
+        re.I,
+    )
+    if not match:
+        return None
+    return "delete_project_file", {
+        "path": match.group("path").replace("\\", "/")
+    }
+
+
 def detect_local_tool(message: str) -> tuple[str, dict] | None:
     """Yalnızca anlamı kesin listeleme/özet komutlarında sonuç döndürür."""
+    project_delete = _detect_project_file_delete(message)
+    if project_delete:
+        return project_delete
+    project_create = _detect_new_project_file(message)
+    if project_create:
+        return project_create
+    document_match = re.fullmatch(
+        r"\s*(?:pdf|word|belge|doküman)(?:\s+dosyası)?\s+"
+        r"(?:oku|incele)\s*:\s*\"?(.+?\.(?:pdf|docx))\"?\s*",
+        str(message or ""),
+        re.I | re.S,
+    )
+    if document_match:
+        return "read_document", {
+            "path": document_match.group(1).strip().strip('"')
+        }
     text = _normalize(message)
     if not text:
         return None
@@ -58,6 +150,19 @@ def detect_local_tool(message: str) -> tuple[str, dict] | None:
         "diğer çalışmalarımı göster",
     }:
         return "get_shared_activity", {"limit": 12}
+
+    if text in {
+        "proje dosyalarını listele", "projedeki dosyaları listele",
+        "proje yapısını göster", "kod dosyalarını göster",
+    }:
+        return "list_project_files", {"query": "", "limit": 120}
+
+    project_file_match = re.fullmatch(
+        r"(?:proje dosyası oku|proje dosyasını oku|proje kodunu incele)\s*:\s*(.+)",
+        text,
+    )
+    if project_file_match:
+        return "read_project_file", {"path": project_file_match.group(1).strip()}
 
     note_match = re.fullmatch(r"(?:not al|not ekle)\s*:\s*(.+)", text)
     if note_match:

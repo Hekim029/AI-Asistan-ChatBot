@@ -252,7 +252,8 @@ class FloatingButton(QWidget):
         self.move(screen.width() - 160, screen.height() - 180)
 
         keyboard.add_hotkey("ctrl+shift+space", self._hotkey_signal.triggered.emit)
-        keyboard.add_hotkey("shift+c", lambda: self._chat._toggle_mic(), suppress=True)
+        # Tek harfli global kısayol yanlışlıkla mikrofonu açabildiği için kaldırıldı.
+        keyboard.add_hotkey("ctrl+shift+m", lambda: self._chat._toggle_mic())
 
     # ═════════════════════════════════════════
     #  Çizim

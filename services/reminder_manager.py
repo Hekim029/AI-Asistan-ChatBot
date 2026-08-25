@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 
 from utils.config import MEMORY_DIR
+from services.security import bounded_json_load, contains_sensitive_data, secure_write_json
 
 
 class ReminderManager:
@@ -30,6 +31,10 @@ class ReminderManager:
         message = (text or "").strip()
         if not message:
             raise ValueError("Hatırlatıcı metni boş olamaz.")
+        if len(message) > 2000:
+            raise ValueError("Hatırlatıcı metni 2000 karakter sınırını aşıyor.")
+        if contains_sensitive_data(message):
+            raise ValueError("Parola veya API anahtarı hatırlatıcılarda saklanamaz.")
 
         due = self._parse_due(due_at)
         if due <= datetime.now().astimezone():
@@ -90,16 +95,12 @@ class ReminderManager:
 
     def _load(self):
         try:
-            with open(self._save_path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            data = bounded_json_load(self._save_path)
             if isinstance(data, list):
                 self._items = [item for item in data if isinstance(item, dict)]
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             self._items = []
 
     def _save(self):
         os.makedirs(os.path.dirname(self._save_path), exist_ok=True)
-        temp_path = self._save_path + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(self._items, handle, ensure_ascii=False, indent=2)
-        os.replace(temp_path, self._save_path)
+        secure_write_json(self._save_path, self._items)

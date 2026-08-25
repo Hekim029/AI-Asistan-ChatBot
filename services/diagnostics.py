@@ -21,7 +21,7 @@ def run_diagnostics() -> list[dict]:
         "Hazır" if config.GROQ_API_KEY else ".env içinde GROQ_API_KEY eksik",
     )
     credentials = os.path.join(config.BASE_DIR, "credentials.json")
-    token = os.path.join(config.MEMORY_DIR, "token.json")
+    token = os.path.join(config.MEMORY_DIR, "token.dat")
     add(
         "Google OAuth kimliği",
         os.path.exists(credentials),

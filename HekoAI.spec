@@ -7,7 +7,7 @@ a = Analysis(
     binaries=[],
     # Kullanıcı verileri, OAuth tokenı ve credentials pakete gömülmez.
     # Uygulama ilk çalıştırmada memory/ klasörünü EXE yanında oluşturur.
-    datas=[('assets', 'assets'), ('nircmd.exe', '.')],
+    datas=[('assets', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

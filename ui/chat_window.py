@@ -12,6 +12,7 @@ from core.worker import ResponseWorker
 import utils.config as config
 from ui.settings_window import SettingsWindow
 from ui.history_window import HistoryWindow
+from ui.project_diff_window import ProjectDiffWindow
 from core.daily_motivation import get_today_motivation
 from services.daily_briefing import DailyBriefingService
 from datetime import datetime, timezone, timedelta
@@ -36,6 +37,41 @@ class DailyBriefingWorker(QThread):
 def _chat_column_width(window_width: int) -> int:
     """Mesajlar ve yazma alanı için ortak, duyarlı kolon genişliği."""
     return max(360, min(900, window_width - 28))
+
+
+def response_for_display(response: str, pending_info: dict | None = None) -> str:
+    """İç protokol/karma ayrıntılarını sohbet kullanıcısından gizler."""
+    text = str(response or "")
+    if text.startswith("ONAY_GEREKLİ:"):
+        tool_name = (pending_info or {}).get("tool_name", "")
+        if tool_name == "update_project_file":
+            return (
+                "Kod değişikliği hazırlandı. Diff penceresinden ayrıntıları "
+                "inceleyip uygulayabilir veya reddedebilirsin."
+            )
+        if tool_name in {"delete_file", "delete_project_file"}:
+            return (
+                "Dosyayı Çöp Kutusu'na taşıma işlemi hazırlandı. "
+                "Aşağıdaki işlem kartından onaylayabilir veya iptal edebilirsin."
+            )
+        return (
+            "İşlem hazırlandı. Ayrıntıları aşağıdaki güvenlik kartından "
+            "inceleyip onaylayabilir veya iptal edebilirsin."
+        )
+    if text.startswith("PROJE DOSYASI:"):
+        lines = text.splitlines()
+        path = lines[0].partition(":")[2].strip()
+        size = next(
+            (line.partition(":")[2].strip() for line in lines if line.startswith("BOYUT:")),
+            "",
+        )
+        separator = next((index for index, line in enumerate(lines) if not line), None)
+        content = "\n".join(lines[separator + 1:]) if separator is not None else ""
+        header = f"Proje dosyası: {path}"
+        if size:
+            header += f"\nBoyut: {size}"
+        return f"{header}\n\n{content}".rstrip()
+    return text
 
 
 class ChatInputBox(QTextEdit):
@@ -171,16 +207,23 @@ class ChatWindow(QMainWindow):
         self._typing_dots = 0
         self._typing_timer = QTimer()
         self._typing_timer.timeout.connect(self._animate_typing)
+        self._operation_timer = QTimer(self)
+        self._operation_timer.setInterval(1000)
+        self._operation_timer.timeout.connect(self._tick_operation)
+        self._operation_elapsed = 0
+        self._operation_status_text = ""
         self._approval_timer = QTimer(self)
         self._approval_timer.setInterval(1000)
         self._approval_timer.timeout.connect(self._update_approval_countdown)
         self._approval_widget = None
         self._approval_countdown = None
         self._approval_buttons = []
+        self._diff_window = None
         self._settings.saved.connect(self._apply_accent)
         self._typing_label = None
         self._typing_wrapper = None
         self._worker = None
+        self._worker_had_pending_action = False
         self._is_online = True
         self._message_count = 0
         self._is_expanded = False
@@ -617,7 +660,15 @@ class ChatWindow(QMainWindow):
             QPushButton:hover {{ background-color: {config.ACCENT_COLOR}cc; }}
             QPushButton:pressed {{ background-color: {config.ACCENT_COLOR}99; }}
         """)
-        self._send_btn.clicked.connect(self._send_message)
+        self._send_btn.clicked.connect(self._handle_send_button)
+
+        self._operation_label = QLabel()
+        self._operation_label.setVisible(False)
+        self._operation_label.setWordWrap(True)
+        self._operation_label.setStyleSheet(
+            "color:#9da7b3;background:#111820;border:1px solid #293444;"
+            "border-radius:8px;padding:6px 10px;"
+        )
 
         # Kutu büyüdükçe mikrofon/gönder butonları alta sabitlensin,
         # üste doğru garip biçimde uzamasınlar.
@@ -627,6 +678,7 @@ class ChatWindow(QMainWindow):
 
         layout.addWidget(self._search_bar)
         layout.setAlignment(self._search_bar, Qt.AlignHCenter)
+        layout.addWidget(self._operation_label)
         layout.addWidget(self._composer_panel, 0, Qt.AlignHCenter)
 
         return input_widget
@@ -820,6 +872,8 @@ class ChatWindow(QMainWindow):
             self._typing_label = None
 
     def _send_message(self):
+        if self._worker and self._worker.isRunning():
+            return
         text = self.input_field.text().strip()
         if not text:
             return
@@ -835,10 +889,30 @@ class ChatWindow(QMainWindow):
         self._show_typing_indicator()
 
         self._worker = ResponseWorker(self.router, text)
-        self._worker.response_ready.connect(self._on_response)
-        self._worker.error_occurred.connect(self._on_error)
-        self._worker.status_update.connect(self._on_status)
-        self._worker.start()
+        worker = self._worker
+        self._worker_had_pending_action = self.router.executor.has_pending_action()
+        worker.response_ready.connect(self._on_response)
+        worker.error_occurred.connect(self._on_error)
+        worker.status_update.connect(self._on_status)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        self._begin_operation("İstek hazırlanıyor...")
+        worker.start()
+
+    def _handle_send_button(self):
+        if self._worker and self._worker.isRunning():
+            self._cancel_current_response()
+            return
+        self._send_message()
+
+    def _cancel_current_response(self):
+        if not self._worker or not self._worker.isRunning():
+            return
+        if self._worker.is_cancelled:
+            return
+        self._worker.cancel()
+        self._operation_status_text = "İptal ediliyor; mevcut ağ adımı bitince duracak..."
+        self._refresh_operation_label()
+        self._send_btn.setEnabled(False)
 
     def _on_status(self, text: str):
         """
@@ -846,21 +920,94 @@ class ChatWindow(QMainWindow):
         açılıyor... vb.) dışarıya iletir. Pet'in yanındaki durum
         balonu bunu kullanır.
         """
+        self._operation_status_text = text or "İşlem sürüyor..."
+        self._refresh_operation_label()
         if self._on_status_callback:
             self._on_status_callback(text)
 
     def _on_response(self, response: str):
         self._hide_typing_indicator()
-        self._add_message(response, is_user=False)
-        if self.router.executor.has_pending_action():
+        pending_info = self.router.executor.pending_action_info()
+        self._add_message(
+            response_for_display(response, pending_info),
+            is_user=False,
+        )
+        if pending_info:
             self._show_approval_card()
         else:
             self._remove_approval_card()
         self.input_field.setEnabled(True)
         self.input_field.setFocus()
-        self._worker = None
+        self._finish_operation()
         if self._on_response_callback:
             self._on_response_callback(response)
+
+    def _on_worker_finished(self, worker):
+        if worker is not self._worker:
+            return
+        if worker.is_cancelled:
+            self._hide_typing_indicator()
+            if (
+                not self._worker_had_pending_action
+                and self.router.executor.has_pending_action()
+            ):
+                self.router.executor.execute("cancel_pending_action", {})
+            message = (
+                "İşlem durduruldu. Başlamış bir dış işlem varsa geri alınmış "
+                "sayılmaz; ancak yeni model ve araç adımları çalıştırılmadı."
+            )
+            self.router.context.add_message("assistant", message)
+            self._add_message(message, is_user=False)
+            self.input_field.setEnabled(True)
+            self.input_field.setFocus()
+            self._finish_operation()
+        self._worker = None
+
+    def _begin_operation(self, status: str):
+        self._operation_elapsed = 0
+        self._operation_status_text = status
+        self._operation_label.setVisible(True)
+        self._operation_timer.start()
+        self._style_send_button(running=True)
+        self._refresh_operation_label()
+
+    def _finish_operation(self):
+        self._operation_timer.stop()
+        self._operation_label.setVisible(False)
+        self._send_btn.setEnabled(True)
+        self._style_send_button(running=False)
+
+    def _tick_operation(self):
+        self._operation_elapsed += 1
+        self._refresh_operation_label()
+
+    def _refresh_operation_label(self):
+        minutes, seconds = divmod(self._operation_elapsed, 60)
+        self._operation_label.setText(
+            f"{self._operation_status_text}   •   {minutes:02d}:{seconds:02d}"
+        )
+
+    def _style_send_button(self, running: bool):
+        if running:
+            self._send_btn.setText("■")
+            self._send_btn.setToolTip("İşlemi durdur")
+            self._send_btn.setStyleSheet(
+                "QPushButton{background:#b4232d;color:white;border:none;"
+                "border-radius:19px;} QPushButton:hover{background:#d03540;}"
+                "QPushButton:disabled{background:#5d252a;color:#c7a0a3;}"
+            )
+            return
+        color = config.ACCENT_COLOR
+        self._send_btn.setText("↑")
+        self._send_btn.setToolTip("Mesajı gönder")
+        self._send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color}; color: #ffffff;
+                border: none; border-radius: 19px;
+            }}
+            QPushButton:hover {{ background-color: {color}cc; }}
+            QPushButton:pressed {{ background-color: {color}99; }}
+        """)
 
     def _show_approval_card(self):
         self._remove_approval_card()
@@ -911,9 +1058,21 @@ class ChatWindow(QMainWindow):
         buttons.addWidget(cancel_btn)
         buttons.addWidget(approve_btn)
 
-        layout.addWidget(self._title_label)
+        layout.addWidget(title)
         layout.addWidget(summary)
         layout.addWidget(self._approval_countdown)
+        project_change = info.get("project_change")
+        if project_change:
+            inspect_btn = QPushButton("Değişikliği ayrıntılı incele")
+            inspect_btn.setFixedHeight(32)
+            inspect_btn.setStyleSheet(
+                "QPushButton{background:#1c2735;color:#79c0ff;border:1px solid "
+                "#365675;border-radius:8px;} QPushButton:hover{background:#24364a;}"
+            )
+            inspect_btn.clicked.connect(
+                lambda _checked=False, detail=project_change: self._open_project_diff(detail)
+            )
+            layout.addWidget(inspect_btn)
         layout.addLayout(buttons)
 
         wrapper = QWidget()
@@ -929,6 +1088,8 @@ class ChatWindow(QMainWindow):
         self._approval_buttons = [cancel_btn, approve_btn]
         self._update_approval_countdown()
         self._approval_timer.start()
+        if project_change:
+            QTimer.singleShot(0, lambda: self._open_project_diff(project_change))
         QTimer.singleShot(
             0,
             lambda: self._scroll.verticalScrollBar().setValue(
@@ -942,6 +1103,28 @@ class ChatWindow(QMainWindow):
         self._approval_timer.stop()
         self.input_field.setText(message)
         self._send_message()
+
+    def _open_project_diff(self, preview: dict):
+        if self._diff_window and self._diff_window.isVisible():
+            self._diff_window.raise_()
+            self._diff_window.activateWindow()
+            return
+        window = ProjectDiffWindow(
+            preview,
+            self.router.executor.pending_action_info,
+            self,
+        )
+        window.approve_requested.connect(
+            lambda: self._submit_approval("onaylıyorum")
+        )
+        window.cancel_requested.connect(
+            lambda: self._submit_approval("iptal")
+        )
+        window.destroyed.connect(lambda: setattr(self, "_diff_window", None))
+        self._diff_window = window
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _update_approval_countdown(self):
         info = self.router.executor.pending_action_info()
@@ -970,6 +1153,9 @@ class ChatWindow(QMainWindow):
 
     def _remove_approval_card(self):
         self._approval_timer.stop()
+        if self._diff_window:
+            self._diff_window.close()
+            self._diff_window = None
         if self._approval_widget:
             self._approval_widget.deleteLater()
         self._approval_widget = None
@@ -980,7 +1166,7 @@ class ChatWindow(QMainWindow):
         self._hide_typing_indicator()
         self._add_message(f"⚠️ {error}", is_user=False)
         self.input_field.setEnabled(True)
-        self._worker = None
+        self._finish_operation()
 
     def _on_selection_changed(self, label: QLabel):
         selected = label.selectedText()
@@ -1052,16 +1238,9 @@ class ChatWindow(QMainWindow):
             QTextEdit:focus {{ border: 1px solid {color}; }}
         """)
 
-        self._send_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {color};
-                color: #ffffff;
-                border: none;
-                border-radius: 19px;
-            }}
-            QPushButton:hover {{ background-color: {color}cc; }}
-            QPushButton:pressed {{ background-color: {color}99; }}
-        """)
+        self._style_send_button(
+            running=bool(self._worker and self._worker.isRunning())
+        )
 
         for i in range(self._messages_layout.count() - 1):
             item = self._messages_layout.itemAt(i)

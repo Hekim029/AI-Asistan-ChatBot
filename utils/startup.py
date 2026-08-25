@@ -1,13 +1,20 @@
 import sys
 import os
 import winreg
+from pathlib import Path
+
+from utils.config import BASE_DIR
 
 APP_NAME = "HekoAI"
 
 def get_executable_path() -> str:
-    vbs_path = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) 
-                            else os.path.abspath("."), "HekoAI.vbs")
-    return f'wscript "{vbs_path}"'
+    if getattr(sys, "frozen", False):
+        executable = Path(sys.executable).resolve()
+        return f'"{executable}"'
+    pythonw = Path(sys.executable).resolve().with_name("pythonw.exe")
+    interpreter = pythonw if pythonw.is_file() else Path(sys.executable).resolve()
+    main_script = (Path(BASE_DIR) / "main.py").resolve()
+    return f'"{interpreter}" "{main_script}"'
 
 def enable_startup() -> str:
     """Windows başlangıcına ekle."""

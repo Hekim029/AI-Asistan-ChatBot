@@ -2,6 +2,16 @@ import os
 import difflib
 from pathlib import Path
 
+from services.security import safe_error
+
+
+BLOCKED_OPEN_EXTENSIONS = {
+    ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe",
+    ".js", ".jse", ".wsf", ".wsh", ".scr", ".msi", ".msp", ".hta",
+    ".reg", ".lnk", ".url", ".cpl", ".jar",
+}
+MAX_SCAN_ITEMS = 20_000
+
 
 # ─────────────────────────────────────────────
 #  Sistem klasörleri
@@ -151,6 +161,11 @@ def _smart_open(target: str, base_path: Path) -> str:
             return f"📁 {base_path.name} klasörü açıldı."
         return "⚠️ Klasör bulunamadı."
 
+    try:
+        target = _validate_search_query(target)
+    except ValueError as exc:
+        return f"⚠️ {exc}"
+
     # Klasördeki tüm öğeleri bir kez oku
     try:
         items = list(base_path.iterdir())
@@ -160,20 +175,30 @@ def _smart_open(target: str, base_path: Path) -> str:
     names = [i.name for i in items]
 
     # 1) Direkt eşleşme
-    direct = base_path / target
+    direct = (base_path / target).resolve()
+    try:
+        direct.relative_to(base_path.resolve())
+    except ValueError:
+        return "⚠️ Ana klasör dışındaki bir hedef açılamaz."
     if direct.exists():
+        if not _is_safe_to_open(direct):
+            return "⚠️ Yürütülebilir veya kısayol dosyaları sohbetten açılamaz."
         os.startfile(str(direct))
         return f"📁 '{target}' açıldı."
 
     # 2) Case-insensitive tam eşleşme
     for item in items:
         if item.name.lower() == target.lower():
+            if not _is_safe_to_open(item):
+                return "⚠️ Yürütülebilir veya kısayol dosyaları sohbetten açılamaz."
             os.startfile(str(item))
             return f"📁 '{item.name}' açıldı."
 
     # 3) Kısmi eşleşme (substring)
     partial = [i for i in items if target.lower() in i.name.lower()]
     if len(partial) == 1:
+        if not _is_safe_to_open(partial[0]):
+            return "⚠️ Yürütülebilir veya kısayol dosyaları sohbetten açılamaz."
         os.startfile(str(partial[0]))
         return f"📁 '{partial[0].name}' açıldı."
     elif len(partial) > 1:
@@ -184,6 +209,8 @@ def _smart_open(target: str, base_path: Path) -> str:
     match = _fuzzy_match(target, names)
     if match:
         path = base_path / match
+        if not _is_safe_to_open(path):
+            return "⚠️ Yürütülebilir veya kısayol dosyaları sohbetten açılamaz."
         os.startfile(str(path))
         return f"📁 '{match}' açıldı. ('{target}' yazmışsın, bunu kastettin sanırım)"
 
@@ -281,14 +308,16 @@ def _open_file(query: str) -> str:
     """Tüm ana dizinlerde dosya arar, fuzzy destekli."""
     search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
 
-    # Önce tam/kısmi eşleşme
-    for directory in search_dirs:
-        if not directory.exists():
-            continue
-        for path in directory.rglob(f"*{query}*"):
-            if path.is_file():
-                os.startfile(str(path))
-                return f"📄 '{path.name}' açıldı."
+    try:
+        query = _validate_search_query(query)
+    except ValueError as exc:
+        return f"⚠️ {exc}"
+
+    for path in _find_matches(query, search_dirs, limit=1):
+        if not _is_safe_to_open(path):
+            return "⚠️ Yürütülebilir veya kısayol dosyaları sohbetten açılamaz."
+        os.startfile(str(path))
+        return f"📄 '{path.name}' açıldı."
 
     # Sonra fuzzy — sadece üst seviye öğelerde
     for directory in search_dirs:
@@ -300,7 +329,10 @@ def _open_file(query: str) -> str:
             continue
         match = _fuzzy_match(query, names)
         if match:
-            os.startfile(str(directory / match))
+            target = directory / match
+            if not _is_safe_to_open(target):
+                return "⚠️ Yürütülebilir veya kısayol dosyaları sohbetten açılamaz."
+            os.startfile(str(target))
             return f"📄 '{match}' açıldı. ('{query}' yazmışsın, bunu kastettin sanırım)"
 
     return f"🔍 '{query}' bulunamadı."
@@ -339,15 +371,9 @@ def _list_folder(path: Path, name: str) -> str:
 
 def _search_file(query: str) -> str:
     try:
+        query = _validate_search_query(query)
         search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
-        results = []
-        for directory in search_dirs:
-            if not directory.exists():
-                continue
-            for path in directory.rglob(f"*{query}*"):
-                results.append(str(path))
-                if len(results) >= 10:
-                    break
+        results = [str(path) for path in _find_matches(query, search_dirs, limit=10)]
 
         if not results:
             return f"🔍 '{query}' ile eşleşen dosya bulunamadı."
@@ -357,23 +383,15 @@ def _search_file(query: str) -> str:
             lines.append(f"  📄 {r}")
         return "\n".join(lines)
     except Exception as e:
-        return f"⚠️ Arama hatası: {str(e)}"
+        return f"⚠️ Arama hatası: {safe_error(e)}"
 
 
 def _delete_file(query: str) -> str:
     try:
-        query = (query or "").strip()
-        if len(query) < 2:
-            return "⚠️ Silinecek dosyanın adını daha açık belirtmelisin."
+        query = _validate_search_query(query)
 
         search_dirs = [_get_desktop(), Path.home() / "Documents", _get_downloads()]
-        found = []
-        for directory in search_dirs:
-            if not directory.exists():
-                continue
-            for path in directory.rglob(f"*{query}*"):
-                if path.is_file():
-                    found.append(path)
+        found = _find_matches(query, search_dirs, limit=50)
 
         if not found:
             return f"🔍 '{query}' ile eşleşen dosya bulunamadı."
@@ -393,7 +411,49 @@ def _delete_file(query: str) -> str:
     except PermissionError:
         return "⚠️ Bu dosyayı silmek için izin yok."
     except Exception as e:
-        return f"⚠️ Silme hatası: {str(e)}"
+        return f"⚠️ Silme hatası: {safe_error(e)}"
+
+
+def _validate_search_query(query: str) -> str:
+    text = " ".join((query or "").strip().split())
+    if len(text) < 2:
+        raise ValueError("Dosya adını daha açık belirtmelisin.")
+    if len(text) > 200:
+        raise ValueError("Dosya araması 200 karakter sınırını aşıyor.")
+    if any(char in text for char in ("/", "\\", "*", "?", "[", "]")) or ".." in text:
+        raise ValueError("Dosya aramasında yol veya joker karakter kullanılamaz.")
+    if any(ord(char) < 32 for char in text):
+        raise ValueError("Dosya araması kontrol karakteri içeremez.")
+    return text
+
+
+def _find_matches(query: str, directories: list[Path], limit: int) -> list[Path]:
+    needle = query.casefold()
+    results: list[Path] = []
+    scanned = 0
+    for directory in directories:
+        if not directory.exists() or directory.is_symlink():
+            continue
+        for path in directory.rglob("*"):
+            scanned += 1
+            if scanned > MAX_SCAN_ITEMS:
+                return results
+            if path.is_symlink() or not path.is_file():
+                continue
+            if needle in path.name.casefold():
+                results.append(path)
+                if len(results) >= limit:
+                    return results
+    return results
+
+
+def _is_safe_to_open(path: Path) -> bool:
+    if path.is_symlink():
+        return False
+    return path.is_dir() or (
+        path.is_file()
+        and path.suffix.casefold() not in BLOCKED_OPEN_EXTENSIONS
+    )
 
 
 def _extract_filename(message: str) -> str:

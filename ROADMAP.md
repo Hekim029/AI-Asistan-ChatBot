@@ -10,8 +10,22 @@
 - Pencerelerin sonuçlarını paylaşan kalıcı `SharedWorkspace`
 - Diğer sohbet çalışmalarını komutla veya Kontrol Merkezi'nden görüntüleme
 - Küçük metin/kod dosyalarını hassas dosya ve boyut korumasıyla salt okunur inceleme
+- Proje köküyle sınırlandırılmış kod dosyası listeleme ve okuma
+- SHA-256 sürüm kontrolü, diff önizlemesi, açık onay ve yedekli kod yazma
 - Groq kullanılamadığında isteğe bağlı Ollama yerel model geri dönüşü
 - Karakterin işlem, uyarı ve bekleme durumları
+- Komut enjeksiyonunu önleyen allowlist tabanlı ve `shell=False` süreç çalıştırma
+- Hassas veri algılama, log maskeleme ve modele göndermeden reddetme
+- OAuth tokenlarını Windows DPAPI ile şifreli saklama ve eski düz metni taşıma
+- Yerel modeli yalnızca loopback bağlantısına sınırlama
+- Atomik yerel veri yazımı, boyut/symlink/yol geçişi korumaları
+- Takvim ve e-posta alanlarında kontrol karakteri ve boyut doğrulaması
+- Bandit statik analizi ve bağımlılık güvenlik denetimi
+- Renkli satır gösterimi, kopyalama, sayaç ve çift yönlü onaya sahip görsel diff penceresi
+- Uzun model/araç zincirlerinde aşama, geçen süre ve işbirlikçi iptal kontrolü
+- Gerçek uygulama onaylı ve proje köküyle sınırlı proje dosyası silme
+- Kullanıcı arayüzünden gizlenen iç onay protokolü ve SHA bilgisi
+- Boyut, symlink, şifreleme ve arşiv bombası korumalı PDF/DOCX okuyucu
 
 ## Çoklu sohbet davranışı
 
@@ -37,12 +51,9 @@ model kurulmasa da çalışır.
 
 ## Kalan sağlamlaştırma işleri
 
-1. Aynı dosyayı iki sohbetin eşzamanlı değiştirmesine karşı yazma kilitleri
-2. Çalışan uzun işlerin iptal/duraklatma ve ayrıntılı ilerleme kayıtları
-3. PDF ve Word içerik okuyucuları
-4. Kullanıcı izinli ekran görüntüsü farkındalığı
-5. Ollama model seçimi ve bağlantı testinin Ayarlar ekranına eklenmesi
-6. Daha kapsamlı karakter animasyonları
+1. Kullanıcı izinli ekran görüntüsü farkındalığı
+2. Ollama model seçimi ve bağlantı testinin Ayarlar ekranına eklenmesi
+3. Daha kapsamlı karakter animasyonları
 
 Bu maddeler dış uygulama kurulumu, yeni dosya yazma yetkileri veya görsel algı
 akışı gerektirdiği için temel mimariden ayrı sağlamlaştırma aşamasında ele alınır.

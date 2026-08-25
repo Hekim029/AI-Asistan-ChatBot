@@ -17,7 +17,7 @@ Artık burada intent mantığı YOK. Router sadece:
 
 from memory.context_manager import ContextManager
 from memory.user_memory import UserMemory
-from services.llm_client import LLMClient
+from services.llm_client import LLMClient, OperationCancelled
 from services.reminder_manager import ReminderManager
 from services.task_manager import TaskManager
 from core.tools import ToolExecutor
@@ -25,6 +25,7 @@ from core.local_intents import clarification_for, detect_local_tool, pending_slo
 from core.shared_state import SharedAssistantState
 from utils.config import MEMORY_DIR
 import os
+from services.security import contains_sensitive_data, safe_error, validate_user_text
 
 
 class Router:
@@ -59,7 +60,7 @@ class Router:
         self.last_tools_used: list[str] = []
         self._pending_local_slot = None
 
-    def get_response(self, message: str, on_status=None) -> str:
+    def get_response(self, message: str, on_status=None, is_cancelled=None) -> str:
         """
         Kullanıcı mesajını işler ve cevabı döndürür.
 
@@ -69,6 +70,19 @@ class Router:
                           Worker (ayrı thread) bunu bir Qt sinyaline
                           çevirip ana thread'e güvenli şekilde iletir.
         """
+        if is_cancelled and is_cancelled():
+            raise OperationCancelled("İşlem başlamadan iptal edildi.")
+        try:
+            message = validate_user_text(message, name="Mesaj", max_length=80_000)
+        except ValueError as exc:
+            return str(exc)
+        if contains_sensitive_data(message):
+            return (
+                "Bu mesaj parola, API anahtarı veya özel anahtar gibi hassas bir "
+                "bilgi içeriyor. Güvenliğin için bunu sohbete kaydetmedim ve modele "
+                "göndermedim. Anahtarı ilgili .env dosyasına kendin eklemelisin."
+            )
+
         self.context.add_message("user", message)
 
         self.last_tools_used = []
@@ -93,8 +107,12 @@ class Router:
             tool_name, args = local_call
             if on_status:
                 on_status(self._friendly_status(tool_name))
+            if is_cancelled and is_cancelled():
+                raise OperationCancelled("İşlem iptal edildi.")
             self._on_tool_used(tool_name, args)
             response = self.executor.execute(tool_name, args)
+            if is_cancelled and is_cancelled():
+                raise OperationCancelled("İşlem iptal edildi.")
             self.context.add_message("assistant", response)
             self.workspace.publish(self.session_id, "tool", message, response)
             return response
@@ -106,9 +124,13 @@ class Router:
             }:
                 if on_status:
                     on_status("Onaylanan işlem uygulanıyor...")
+                if is_cancelled and is_cancelled():
+                    raise OperationCancelled("İşlem iptal edildi.")
                 response = self.executor.execute(
                     "confirm_pending_action", {}
                 )
+                if is_cancelled and is_cancelled():
+                    raise OperationCancelled("İşlem iptal edildi.")
                 self.context.add_message("assistant", response)
                 return response
             if normalized in {
@@ -126,8 +148,12 @@ class Router:
             tool_name, args = local_call
             if on_status:
                 on_status(self._friendly_status(tool_name))
+            if is_cancelled and is_cancelled():
+                raise OperationCancelled("İşlem iptal edildi.")
             self._on_tool_used(tool_name, args)
             response = self.executor.execute(tool_name, args)
+            if is_cancelled and is_cancelled():
+                raise OperationCancelled("İşlem iptal edildi.")
             self.context.add_message("assistant", response)
             self.workspace.publish(self.session_id, "tool", message, response)
             return response
@@ -155,12 +181,17 @@ class Router:
                 ),
                 executor=self.executor,
                 on_tool_used=handle_tool,
+                is_cancelled=is_cancelled,
             )
+        except OperationCancelled:
+            raise
         except Exception as e:
             from services.error_logger import log_exception
             log_exception("router", e)
-            response = f"Bir sorun oluştu: {e}"
+            response = f"Bir sorun oluştu: {safe_error(e)}"
 
+        if is_cancelled and is_cancelled():
+            raise OperationCancelled("İşlem iptal edildi.")
         self.context.add_message("assistant", response)
         self.workspace.publish(self.session_id, "conversation", message, response)
         return response
@@ -201,6 +232,11 @@ class Router:
         "delete_calendar_event": "Takvim etkinliği siliniyor...",
         "get_emails":          "Mailler kontrol ediliyor...",
         "read_email":          "Mail içeriği okunuyor...",
+        "list_project_files":  "Proje dosyaları listeleniyor...",
+        "read_project_file":   "Proje dosyası okunuyor...",
+        "update_project_file": "Kod değişikliği önizlemesi hazırlanıyor...",
+        "delete_project_file": "Proje dosyası için güvenli silme onayı hazırlanıyor...",
+        "read_document":       "Belgeden güvenli biçimde metin çıkarılıyor...",
         "send_email":          "Mail gönderiliyor...",
         "get_system_status":   "Sistem durumu kontrol ediliyor...",
         "remember_about_user": "Not alınıyor...",
@@ -220,7 +256,8 @@ class Router:
         Loglar ve last_tools_used listesine ekler (debug/UI amaçlı).
         """
         self.last_tools_used.append(tool_name)
-        print(f"🔧 Araç: {tool_name}({args})")
+        arg_names = ", ".join(sorted(str(key) for key in args))
+        print(f"[ARAC] {tool_name} (alanlar: {arg_names or 'yok'})")
 
     # ─────────────────────────────────────────
     #  Dışarıdan erişim (UI için)

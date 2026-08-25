@@ -1,8 +1,19 @@
 import json
 import os
+import threading
+from functools import wraps
 from datetime import datetime
 from uuid import uuid4
 from utils.config import MEMORY_DIR
+from services.security import contains_sensitive_data, secure_write_json, safe_error
+
+
+def _locked(method):
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class UserMemory:
@@ -24,6 +35,7 @@ class UserMemory:
     }
 
     def __init__(self):
+        self._lock = threading.RLock()
         self._memories: dict = {
             "name":        None,   # tek değer
             "profession":  None,   # tek değer
@@ -39,6 +51,7 @@ class UserMemory:
     #  Dışarıdan çağrılan ana metotlar
     # ─────────────────────────────────────────────
 
+    @_locked
     def add(self, memory: str, source: str = "conversation"):
         """
         Hafızaya yeni bir bilgi ekler.
@@ -46,6 +59,8 @@ class UserMemory:
         """
         memory = memory.strip()
         if not memory:
+            return
+        if len(memory) > 5000 or contains_sensitive_data(memory):
             return
 
         category = self._detect_category(memory)
@@ -62,6 +77,7 @@ class UserMemory:
         self._record_metadata(category, memory, source)
         self._save()
 
+    @_locked
     def add_to(
         self,
         category: str,
@@ -79,6 +95,8 @@ class UserMemory:
         value = (value or "").strip()
         if not value or category not in self._memories:
             return
+        if len(value) > 5000 or contains_sensitive_data(value):
+            return
 
         if category in ("name", "profession"):
             # Tekil alan — üzerine yaz
@@ -95,16 +113,20 @@ class UserMemory:
         self._record_metadata(category, value, source, confidence)
         self._save()
 
+    @_locked
     def get_all(self) -> dict:
         return self._memories.copy()
 
+    @_locked
     def get_category(self, category: str) -> list | str | None:
         return self._memories.get(category)
 
+    @_locked
     def get_entries(self) -> list[dict]:
         """Zaman, kaynak ve güven bilgisiyle yönetilebilir hafıza kayıtları."""
         return [entry.copy() for entry in self._metadata]
 
+    @_locked
     def update_entry(self, entry_id: str, category: str, value: str) -> bool:
         """Bir hafıza kaydını kimliği üzerinden güvenli biçimde günceller."""
         entry_id = (entry_id or "").strip()
@@ -137,6 +159,7 @@ class UserMemory:
             self._save()
         return True
 
+    @_locked
     def remove_by_id(self, entry_id: str) -> bool:
         """Yanlış metin eşleşmesi riskini önleyerek tek bir kaydı siler."""
         target = next(
@@ -147,6 +170,7 @@ class UserMemory:
             return False
         return self.remove(target.get("category", ""), target.get("value", ""))
 
+    @_locked
     def remove(self, category: str, value: str = "") -> bool:
         """Belirli bir hafıza kaydını güvenli ve tam eşleşmeyle kaldırır."""
         if category not in self._memories:
@@ -182,12 +206,14 @@ class UserMemory:
             self._save()
         return removed
 
+    @_locked
     def clear(self):
         for key in self._memories:
             self._memories[key] = [] if isinstance(self._memories[key], list) else None
         self._metadata = []
         self._save()
 
+    @_locked
     def formatted(self) -> str:
         """
         LLM prompt'una eklenecek, okunabilir hafıza özeti.
@@ -280,23 +306,22 @@ class UserMemory:
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+    @_locked
     def _save(self):
         os.makedirs(os.path.dirname(self._SAVE_PATH), exist_ok=True)
         try:
-            with open(self._SAVE_PATH, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "version": self._VERSION,
-                        "memories": self._memories,
-                        "metadata": self._metadata,
-                    },
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
+            secure_write_json(
+                self._SAVE_PATH,
+                {
+                    "version": self._VERSION,
+                    "memories": self._memories,
+                    "metadata": self._metadata,
+                },
+            )
         except Exception as e:
-            print(f"❌ UserMemory kaydedilirken hata: {e}")
+            print(f"[HATA] UserMemory kaydedilemedi: {safe_error(e)}")
 
+    @_locked
     def _load(self):
         if not os.path.exists(self._SAVE_PATH):
             return
@@ -334,4 +359,4 @@ class UserMemory:
             self._save()
 
         except Exception as e:
-            print(f"❌ UserMemory yüklenirken hata: {e}")
+            print(f"[HATA] UserMemory yüklenemedi: {safe_error(e)}")

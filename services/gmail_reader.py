@@ -2,39 +2,24 @@ import os
 import base64
 import datetime
 from email.mime.text import MIMEText
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-import utils.config as config
-
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-]
-TOKEN_PATH = os.path.join(config.MEMORY_DIR, "token.json")
-CREDENTIALS_PATH = os.path.join(config.BASE_DIR, "credentials.json")
+from services.google_auth import get_credentials
+from services.security import (
+    clean_single_line,
+    safe_error,
+    sanitize_untrusted_text,
+    validate_user_text,
+)
 
 
 def get_gmail_service():
-    creds = None
-    if os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-    if not creds or not creds.valid or not creds.has_scopes(SCOPES):
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, "w") as token:
-            token.write(creds.to_json())
-    return build("gmail", "v1", credentials=creds)
+    return build("gmail", "v1", credentials=get_credentials(), cache_discovery=False)
 
 
 def get_unread_emails(max_results: int = 5) -> str:
     """Okunmamış mailleri getir."""
     try:
+        max_results = max(1, min(int(max_results), 20))
         service = get_gmail_service()
         results = service.users().messages().list(
             userId="me",
@@ -54,8 +39,8 @@ def get_unread_emails(max_results: int = 5) -> str:
             ).execute()
 
             headers = {h["name"]: h["value"] for h in detail["payload"]["headers"]}
-            sender = headers.get("From", "Bilinmiyor")
-            subject = headers.get("Subject", "Konu yok")
+            sender = sanitize_untrusted_text(headers.get("From", "Bilinmiyor"), 300)
+            subject = sanitize_untrusted_text(headers.get("Subject", "Konu yok"), 500)
 
             # Gönderen adını sadeleştir
             if "<" in sender:
@@ -65,12 +50,13 @@ def get_unread_emails(max_results: int = 5) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"⚠️ Gmail hatası: {str(e)}"
+        return f"⚠️ Gmail hatası: {safe_error(e)}"
 
 
 def get_today_emails(max_results: int = 10) -> str:
     """Bugün gelen mailleri getir."""
     try:
+        max_results = max(1, min(int(max_results), 20))
         service = get_gmail_service()
         today = datetime.date.today().strftime("%Y/%m/%d")
 
@@ -92,8 +78,8 @@ def get_today_emails(max_results: int = 10) -> str:
             ).execute()
 
             headers = {h["name"]: h["value"] for h in detail["payload"]["headers"]}
-            sender = headers.get("From", "Bilinmiyor")
-            subject = headers.get("Subject", "Konu yok")
+            sender = sanitize_untrusted_text(headers.get("From", "Bilinmiyor"), 300)
+            subject = sanitize_untrusted_text(headers.get("Subject", "Konu yok"), 500)
 
             if "<" in sender:
                 sender = sender.split("<")[0].strip().strip('"')
@@ -102,12 +88,15 @@ def get_today_emails(max_results: int = 10) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"⚠️ Gmail hatası: {str(e)}"
+        return f"⚠️ Gmail hatası: {safe_error(e)}"
 
 
 def send_email(to: str, subject: str, body: str) -> str:
     """Mail gönder."""
     try:
+        to = clean_single_line(to, name="Alıcı", max_length=320)
+        subject = clean_single_line(subject, name="Mail konusu", max_length=998)
+        body = validate_user_text(body, name="Mail içeriği", max_length=100_000)
         service = get_gmail_service()
         message = MIMEText(body)
         message["to"] = to
@@ -121,12 +110,14 @@ def send_email(to: str, subject: str, body: str) -> str:
 
         return f"✅ Mail gönderildi → {to}"
     except Exception as e:
-        return f"⚠️ Mail gönderilemedi: {str(e)}"
+        return f"⚠️ Mail gönderilemedi: {safe_error(e)}"
 
 
 def search_emails(query: str, max_results: int = 5) -> str:
     """Maillerде arama yap."""
     try:
+        query = clean_single_line(query, name="Mail arama sorgusu", max_length=500)
+        max_results = max(1, min(int(max_results), 20))
         service = get_gmail_service()
         results = service.users().messages().list(
             userId="me",
@@ -146,8 +137,8 @@ def search_emails(query: str, max_results: int = 5) -> str:
             ).execute()
 
             headers = {h["name"]: h["value"] for h in detail["payload"]["headers"]}
-            sender = headers.get("From", "Bilinmiyor")
-            subject = headers.get("Subject", "Konu yok")
+            sender = sanitize_untrusted_text(headers.get("From", "Bilinmiyor"), 300)
+            subject = sanitize_untrusted_text(headers.get("Subject", "Konu yok"), 500)
 
             if "<" in sender:
                 sender = sender.split("<")[0].strip().strip('"')
@@ -156,7 +147,7 @@ def search_emails(query: str, max_results: int = 5) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"⚠️ Gmail hatası: {str(e)}"
+        return f"⚠️ Gmail hatası: {safe_error(e)}"
 
 
 def _decode_message_part(part: dict) -> str:
@@ -176,6 +167,7 @@ def _decode_message_part(part: dict) -> str:
 def read_email(query: str) -> str:
     """Arama ifadesiyle eşleşen en yeni mailin başlık ve düz metin içeriğini getir."""
     try:
+        query = clean_single_line(query, name="Mail arama sorgusu", max_length=500)
         service = get_gmail_service()
         results = service.users().messages().list(
             userId="me", q=query, maxResults=1
@@ -192,14 +184,15 @@ def read_email(query: str) -> str:
             header.get("name", "").lower(): header.get("value", "")
             for header in payload.get("headers") or []
         }
-        body = _decode_message_part(payload).strip() or detail.get("snippet", "").strip()
-        if len(body) > 4000:
-            body = body[:3997] + "..."
+        body = sanitize_untrusted_text(
+            _decode_message_part(payload).strip() or detail.get("snippet", "").strip(),
+            4000,
+        )
         return (
-            f"Gönderen: {headers.get('from', 'Bilinmiyor')}\n"
-            f"Konu: {headers.get('subject', 'Konu yok')}\n"
-            f"Tarih: {headers.get('date', 'Bilinmiyor')}\n\n"
+            f"Gönderen: {sanitize_untrusted_text(headers.get('from', 'Bilinmiyor'), 300)}\n"
+            f"Konu: {sanitize_untrusted_text(headers.get('subject', 'Konu yok'), 500)}\n"
+            f"Tarih: {sanitize_untrusted_text(headers.get('date', 'Bilinmiyor'), 200)}\n\n"
             f"{body or 'Mailin okunabilir düz metin içeriği yok.'}"
         )
     except Exception as e:
-        return f"⚠️ Gmail hatası: {str(e)}"
+        return f"⚠️ Gmail hatası: {safe_error(e)}"

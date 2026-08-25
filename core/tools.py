@@ -16,6 +16,7 @@ MANTIK:
 from datetime import datetime, timedelta
 import time
 import math
+import re
 
 
 # ═════════════════════════════════════════════
@@ -711,6 +712,99 @@ TOOLS.append({
 TOOLS.append({
     "type": "function",
     "function": {
+        "name": "read_document",
+        "description": (
+            "Kullanıcının açıkça verdiği PDF veya DOCX belgesinden yalnızca "
+            "metin çıkarır. Belgeyi okuma, inceleme veya özetleme isteklerinde kullan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Okunacak .pdf veya .docx dosyasının tam yolu."
+                }
+            },
+            "required": ["path"],
+        },
+    },
+})
+
+TOOLS.extend([
+    {
+        "type": "function",
+        "function": {
+            "name": "list_project_files",
+            "description": "Etkin kod projesindeki dosyaları salt okunur listeler.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "İsteğe bağlı dosya adı filtresi."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_project_file",
+            "description": "Etkin projedeki bir kod/metin dosyasını göreli yoluyla okur ve sürüm karmasını döndürür.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Örnek: services/llm_client.py"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_project_file",
+            "description": (
+                "Etkin projede bir metin/kod dosyası oluşturur veya tüm içeriğini günceller. "
+                "Önce diff önizlemesi ve kullanıcı onayı ister. Mevcut dosya için önce "
+                "read_project_file kullan ve dönen sha256 değerini expected_sha256 olarak ver."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Proje içindeki göreli dosya yolu."},
+                    "content": {"type": "string", "description": "Dosyanın yeni tam içeriği."},
+                    "expected_sha256": {"type": "string", "description": "Okunan mevcut sürümün sha256 değeri."},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_project_file",
+            "description": (
+                "Etkin proje içindeki göreli yolu verilen bir dosyayı kalıcı "
+                "silmek yerine Windows Çöp Kutusu'na taşır. Açık onay gerektirir."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Proje içindeki göreli dosya yolu."
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+])
+
+TOOLS.append({
+    "type": "function",
+    "function": {
         "name": "read_text_file",
         "description": (
             "Kullanıcının açıkça belirttiği küçük bir metin veya kod dosyasını "
@@ -747,12 +841,15 @@ class ToolExecutor:
     CONFIRMATION_TTL = timedelta(minutes=5)
     HIGH_RISK_TOOLS = {
         "delete_file",
+        "delete_project_file",
         "send_email",
         "create_calendar_event",
         "update_calendar_event",
         "delete_calendar_event",
         "clear_history",
         "forget_user_memory",
+        "update_project_file",
+        "close_app",
     }
 
     def __init__(
@@ -800,8 +897,9 @@ class ToolExecutor:
             return handler(args)
         except Exception as e:
             from services.error_logger import log_exception
+            from services.security import safe_error
             log_exception(f"tool.{tool_name}", e)
-            return f"⚠️ '{tool_name}' çalıştırılırken hata: {e}"
+            return f"⚠️ '{tool_name}' çalıştırılırken hata: {safe_error(e)}"
 
     def _request_confirmation(self, tool_name: str, args: dict) -> str:
         if self._pending_action:
@@ -814,6 +912,16 @@ class ToolExecutor:
                 f"Bekleyen işlem: {current}"
             )
 
+        # Proje yazma isteği, bekleyen bir onay oluşturmadan önce diff ve yol
+        # doğrulamasından geçsin. Aksi halde geçersiz bir yol bile beş dakika
+        # boyunca onay kuyruğunu gereksiz yere kilitleyebiliyordu.
+        summary = self._action_summary(tool_name, args)
+        if summary.startswith((
+            "Geçersiz proje değişikliği:",
+            "Geçersiz proje silme isteği:",
+        )):
+            return f"⚠️ {summary}"
+
         self._pending_action = {
             "tool_name": tool_name,
             "args": dict(args),
@@ -823,7 +931,6 @@ class ToolExecutor:
             "expires_at": time.monotonic()
             + self.CONFIRMATION_TTL.total_seconds(),
         }
-        summary = self._action_summary(tool_name, args)
         return (
             "ONAY_GEREKLİ: İşlem henüz yapılmadı.\n"
             f"İşlem: {summary}\n"
@@ -851,8 +958,9 @@ class ToolExecutor:
             return handler(pending["args"])
         except Exception as e:
             from services.error_logger import log_exception
+            from services.security import safe_error
             log_exception(f"tool.{tool_name}", e)
-            return f"⚠️ '{tool_name}' çalıştırılırken hata: {e}"
+            return f"⚠️ '{tool_name}' çalıştırılırken hata: {safe_error(e)}"
 
     def _cancel_pending_action(self, args: dict) -> str:
         pending = self._pending_action
@@ -874,13 +982,24 @@ class ToolExecutor:
     def _pending_is_expired(pending: dict) -> bool:
         return time.monotonic() >= pending.get("expires_at", 0)
 
-    @staticmethod
-    def _action_summary(tool_name: str, args: dict) -> str:
+    def _action_summary(self, tool_name: str, args: dict) -> str:
         if tool_name == "delete_file":
             return (
                 f"'{args.get('query', '')}' adlı dosyayı "
                 "çöp kutusuna taşımak"
             )
+        if tool_name == "delete_project_file":
+            try:
+                preview = self._project_workspace().preview_delete(
+                    args.get("path", "")
+                )
+                return (
+                    f"Proje içindeki '{preview['path']}' dosyasını "
+                    f"Windows Çöp Kutusu'na taşımak ({preview['size']} bayt)"
+                )
+            except Exception as exc:
+                from services.security import safe_error
+                return f"Geçersiz proje silme isteği: {safe_error(exc)}"
         if tool_name == "send_email":
             body = str(args.get("body", "")).strip().replace("\n", " ")
             if len(body) > 240:
@@ -917,6 +1036,33 @@ class ToolExecutor:
                 f"'{args.get('category', '')}' kategorisindeki "
                 f"'{args.get('value', '')}' bilgisini unutmak"
             )
+        if tool_name == "update_project_file":
+            try:
+                preview = self._project_workspace().preview_change(
+                    args.get("path", ""), args.get("content", ""),
+                    args.get("expected_sha256", ""),
+                )
+                additions = sum(
+                    1 for line in preview["diff"].splitlines()
+                    if line.startswith("+") and not line.startswith("+++")
+                )
+                deletions = sum(
+                    1 for line in preview["diff"].splitlines()
+                    if line.startswith("-") and not line.startswith("---")
+                )
+                state = "yeni dosya" if preview["is_new"] else "mevcut dosya"
+                return (
+                    f"Proje dosyasını güncellemek: {preview['path']} "
+                    f"({state}, +{additions} / -{deletions} satır)"
+                )
+            except Exception as exc:
+                from services.security import safe_error
+                return f"Geçersiz proje değişikliği: {safe_error(exc)}"
+        if tool_name == "close_app":
+            return (
+                f"'{args.get('app_name', '')}' uygulamasını zorla kapatmak. "
+                "Kaydedilmemiş çalışmalar kaybolabilir"
+            )
         return tool_name
 
     def has_pending_action(self) -> bool:
@@ -930,12 +1076,31 @@ class ToolExecutor:
             0,
             math.ceil(pending.get("expires_at", 0) - time.monotonic()),
         )
-        return {
+        info = {
+            "tool_name": pending["tool_name"],
             "summary": self._action_summary(
                 pending["tool_name"], pending["args"]
             ),
             "seconds_remaining": remaining,
         }
+        if pending["tool_name"] == "update_project_file":
+            try:
+                preview = self._project_workspace().preview_change(
+                    pending["args"].get("path", ""),
+                    pending["args"].get("content", ""),
+                    pending["args"].get("expected_sha256", ""),
+                )
+                info["project_change"] = {
+                    key: preview[key]
+                    for key in (
+                        "path", "old_sha256", "new_sha256", "diff",
+                        "changed", "is_new",
+                    )
+                }
+            except Exception as exc:
+                from services.security import safe_error
+                info["project_change_error"] = safe_error(exc)
+        return info
 
     # ─────────────────────────────────────────
     #  Zaman
@@ -1119,6 +1284,10 @@ class ToolExecutor:
         from services.pc_controller import _delete_file
         return _delete_file(args.get("query", ""))
 
+    def _delete_project_file(self, args: dict) -> str:
+        item = self._project_workspace().trash_file(args.get("path", ""))
+        return f"Proje dosyası Çöp Kutusu'na taşındı: {item['path']}"
+
     # ─────────────────────────────────────────
     #  Uygulama
     # ─────────────────────────────────────────
@@ -1173,6 +1342,7 @@ class ToolExecutor:
 
     def _open_website(self, args: dict) -> str:
         import webbrowser
+        from services.security import clean_single_line, validate_https_url
 
         sites = {
             "youtube":     "https://www.youtube.com",
@@ -1189,16 +1359,19 @@ class ToolExecutor:
             "firat":       "https://firat.edu.tr",
         }
 
-        site = args.get("site", "").lower().strip()
+        site = clean_single_line(
+            args.get("site", ""), name="Site", max_length=253
+        ).lower()
         url  = sites.get(site)
 
         if not url:
             # Tanımlı değilse doğrudan domain olarak dene
-            if "." in site:
-                url = site if site.startswith("http") else f"https://{site}"
+            if "." in site and not any(char in site for char in "/\\@?#"):
+                url = f"https://{site}"
             else:
                 return f"'{site}' sitesini tanımıyorum."
 
+        url = validate_https_url(url)
         webbrowser.open(url)
         return f"{site.capitalize()} açıldı."
 
@@ -1217,7 +1390,10 @@ class ToolExecutor:
         import webbrowser
         import urllib.parse
 
-        query    = args.get("query", "").strip()
+        from services.security import validate_user_text
+        query = validate_user_text(
+            args.get("query", ""), name="Arama sorgusu", max_length=500
+        )
         platform = args.get("platform", "google").lower()
 
         if not query:
@@ -1269,13 +1445,20 @@ class ToolExecutor:
                     "key":        api_key,
                 },
                 timeout=8,
+                allow_redirects=False,
             )
             r.raise_for_status()
             items = r.json().get("items", [])
             if items:
-                return items[0]["id"]["videoId"]
+                video_id = str(items[0]["id"]["videoId"])
+                if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                    return video_id
         except Exception as e:
-            print(f"⚠️ YouTube API hatası, arama sayfasına düşülüyor: {e}")
+            from services.security import safe_error
+            print(
+                "[UYARI] YouTube API hatası, arama sayfasına geçiliyor: "
+                f"{safe_error(e)}"
+            )
 
         return None
 
@@ -1296,13 +1479,10 @@ class ToolExecutor:
         try:
             os.startfile(f"spotify:search:{encoded}")
 
-            import keyboard
-            time.sleep(3)      # Spotify'ın açılıp arama sonucunu göstermesini bekle
-            keyboard.press_and_release("enter")
-            time.sleep(0.3)
-            keyboard.press_and_release("enter")  # bazen ilk Enter'ı yakalamıyor, tekrar dene
-
-            return f"Spotify'da '{query}' bulunup çalınıyor."
+            return (
+                f"Spotify'da '{query}' araması açıldı. Güvenlik nedeniyle "
+                "başka pencereye otomatik tuş gönderilmedi."
+            )
 
         except Exception as e:
             return f"Spotify'da '{query}' arandı ama otomatik çalma başarısız oldu: {e}"
@@ -1450,16 +1630,87 @@ class ToolExecutor:
             )
         return result
 
+    def _read_document(self, args: dict) -> str:
+        from services.document_reader import read_document
+
+        item = read_document(args.get("path", ""))
+        suffix = (
+            "\n\n[Belge güvenli çıktı sınırı nedeniyle kısaltıldı.]"
+            if item["truncated"] else ""
+        )
+        result = (
+            f"Belge: {item['name']}\nTür: {item['kind']}\n"
+            f"Kapsam: {item['unit_count']} {item['unit_name']}\n\n"
+            f"{item['content']}{suffix}"
+        )
+        if self.shared_workspace is not None:
+            self.shared_workspace.publish(
+                self.session_id,
+                "document",
+                f"Belge incelendi: {item['name']}",
+                item["content"][:1600],
+            )
+        return result
+
+    @staticmethod
+    def _project_workspace():
+        from services.project_workspace import ProjectWorkspace
+        from utils.config import HEKO_PROJECT_ROOT
+        return ProjectWorkspace(HEKO_PROJECT_ROOT)
+
+    def _list_project_files(self, args: dict) -> str:
+        item = self._project_workspace().list_files(
+            args.get("query", ""), int(args.get("limit", 120))
+        )
+        lines = [f"PROJE: {item['root']}", "DOSYALAR:"]
+        lines.extend(f"- {path}" for path in item["files"])
+        if item["truncated"]:
+            lines.append("[Liste sınır nedeniyle kısaltıldı.]")
+        return "\n".join(lines)
+
+    def _read_project_file(self, args: dict) -> str:
+        item = self._project_workspace().read_file(args.get("path", ""))
+        result = (
+            f"PROJE DOSYASI: {item['path']}\nSHA256: {item['sha256']}\n"
+            f"BOYUT: {item['size']} bayt\n\n{item['content']}"
+        )
+        if self.shared_workspace is not None:
+            self.shared_workspace.publish(
+                self.session_id, "project_file", f"Kod okundu: {item['path']}",
+                result[:6000],
+            )
+        return result
+
+    def _update_project_file(self, args: dict) -> str:
+        item = self._project_workspace().apply_change(
+            args.get("path", ""), args.get("content", ""),
+            args.get("expected_sha256", ""),
+        )
+        if not item["changed"]:
+            return f"Değişiklik yok: {item['path']} zaten aynı içerikte."
+        result = f"Proje dosyası güncellendi: {item['path']}"
+        if item["backup"]:
+            result += f"\nÖnceki sürüm yedeklendi: {item['backup']}"
+        if self.shared_workspace is not None:
+            self.shared_workspace.publish(
+                self.session_id, "code_change", f"Kod güncellendi: {item['path']}",
+                item["diff"][:6000],
+            )
+        return result
+
     # ─────────────────────────────────────────
     #  Hafıza
     # ─────────────────────────────────────────
 
     def _remember_about_user(self, args: dict) -> str:
+        from services.security import contains_sensitive_data
         category = args.get("category", "misc")
         value    = args.get("value", "").strip()
 
         if not value:
             return "Kaydedilecek bilgi boş."
+        if len(value) > 5000 or contains_sensitive_data(value):
+            return "Parola, API anahtarı veya çok uzun içerik kalıcı hafızaya kaydedilemez."
 
         # LLM'in kategori adları -> user_memory alan adları
         mapping = {

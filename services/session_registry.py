@@ -4,6 +4,7 @@ import json
 import os
 
 from utils.config import MEMORY_DIR
+from services.security import bounded_json_load, secure_write_json
 
 
 class SessionRegistry:
@@ -25,16 +26,12 @@ class SessionRegistry:
 
     def _load(self):
         try:
-            with open(self.save_path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            data = bounded_json_load(self.save_path, max_bytes=512_000)
             if isinstance(data, dict):
                 self._names = {str(k): str(v) for k, v in data.items() if v}
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             self._names = {}
 
     def _save(self):
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
-        temp = self.save_path + ".tmp"
-        with open(temp, "w", encoding="utf-8") as handle:
-            json.dump(self._names, handle, ensure_ascii=False, indent=2)
-        os.replace(temp, self.save_path)
+        secure_write_json(self.save_path, self._names)

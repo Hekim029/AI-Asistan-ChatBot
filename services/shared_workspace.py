@@ -9,6 +9,11 @@ import uuid
 from datetime import datetime
 
 from utils.config import MEMORY_DIR
+from services.security import (
+    bounded_json_load,
+    redact_sensitive_data,
+    secure_write_json,
+)
 
 
 class SharedWorkspace:
@@ -23,8 +28,8 @@ class SharedWorkspace:
             "id": uuid.uuid4().hex[:10],
             "session_id": session_id,
             "kind": kind,
-            "title": (title or kind).strip(),
-            "content": (content or "").strip()[:6000],
+            "title": redact_sensitive_data((title or kind).strip())[:300],
+            "content": redact_sensitive_data((content or "").strip())[:6000],
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         with self._lock:
@@ -54,16 +59,12 @@ class SharedWorkspace:
 
     def _load(self):
         try:
-            with open(self.save_path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            data = bounded_json_load(self.save_path)
             if isinstance(data, list):
                 self._events = [item for item in data if isinstance(item, dict)]
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             self._events = []
 
     def _save(self):
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
-        temp = self.save_path + ".tmp"
-        with open(temp, "w", encoding="utf-8") as handle:
-            json.dump(self._events, handle, ensure_ascii=False, indent=2)
-        os.replace(temp, self.save_path)
+        secure_write_json(self.save_path, self._events)

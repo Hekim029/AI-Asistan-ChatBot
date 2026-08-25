@@ -1,35 +1,21 @@
-import os
 import datetime
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-import utils.config as config
-
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-]
-TOKEN_PATH = os.path.join(config.MEMORY_DIR, "token.json")
-CREDENTIALS_PATH = os.path.join(config.BASE_DIR, "credentials.json")
+from services.google_auth import get_credentials
+from services.security import clean_single_line, sanitize_untrusted_text, validate_user_text
 
 def get_service():
-    creds = None
+    return build("calendar", "v3", credentials=get_credentials(), cache_discovery=False)
 
-    if os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
 
-    if not creds or not creds.valid or not creds.has_scopes(SCOPES):
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, "w") as token:
-            token.write(creds.to_json())
-
-    return build("calendar", "v3", credentials=creds)
+def _validated_datetime(value: str, *, field_name: str) -> tuple[str, datetime.datetime]:
+    text = clean_single_line(value, name=field_name, max_length=100)
+    try:
+        parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} ISO-8601 biçiminde geçerli bir tarih-saat olmalı."
+        ) from exc
+    return text, parsed
 
 
 def create_calendar_event(
@@ -38,6 +24,20 @@ def create_calendar_event(
     end_at: str,
     description: str = "",
 ) -> str:
+    title = clean_single_line(title, name="Etkinlik başlığı", max_length=500)
+    description = validate_user_text(
+        description or "Açıklama yok", name="Etkinlik açıklaması", max_length=10_000
+    ) if description else ""
+    start_at, start_dt = _validated_datetime(start_at, field_name="Başlangıç")
+    end_at, end_dt = _validated_datetime(end_at, field_name="Bitiş")
+    try:
+        valid_order = end_dt > start_dt
+    except TypeError as exc:
+        raise ValueError(
+            "Başlangıç ve bitiş saatleri aynı saat dilimi biçimini kullanmalı."
+        ) from exc
+    if not valid_order:
+        raise ValueError("Etkinlik bitişi başlangıçtan sonra olmalı.")
     service = get_service()
     event = service.events().insert(
         calendarId="primary",
@@ -48,10 +48,12 @@ def create_calendar_event(
             "end": {"dateTime": end_at, "timeZone": "Europe/Istanbul"},
         },
     ).execute()
-    return f"Takvim etkinliği oluşturuldu: {event.get('summary', title)}"
+    summary = sanitize_untrusted_text(event.get("summary", title), 500)
+    return f"Takvim etkinliği oluşturuldu: {summary}"
 
 
 def _find_primary_event(query: str) -> dict | None:
+    query = clean_single_line(query, name="Etkinlik araması", max_length=500)
     service = get_service()
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     events = service.events().list(
@@ -76,19 +78,24 @@ def update_calendar_event(
     if not event:
         return f"'{query}' ile eşleşen yaklaşan etkinlik bulunamadı."
     if title:
-        event["summary"] = title
+        event["summary"] = clean_single_line(title, name="Etkinlik başlığı", max_length=500)
     if description:
-        event["description"] = description
+        event["description"] = validate_user_text(
+            description, name="Etkinlik açıklaması", max_length=10_000
+        )
     if start_at:
+        start_at, _ = _validated_datetime(start_at, field_name="Başlangıç")
         event["start"] = {"dateTime": start_at, "timeZone": "Europe/Istanbul"}
     if end_at:
+        end_at, _ = _validated_datetime(end_at, field_name="Bitiş")
         event["end"] = {"dateTime": end_at, "timeZone": "Europe/Istanbul"}
     get_service().events().update(
         calendarId="primary",
         eventId=event["id"],
         body=event,
     ).execute()
-    return f"Takvim etkinliği güncellendi: {event.get('summary', query)}"
+    summary = sanitize_untrusted_text(event.get("summary", query), 500)
+    return f"Takvim etkinliği güncellendi: {summary}"
 
 
 def delete_calendar_event(query: str) -> str:
@@ -99,11 +106,13 @@ def delete_calendar_event(query: str) -> str:
         calendarId="primary",
         eventId=event["id"],
     ).execute()
-    return f"Takvim etkinliği silindi: {event.get('summary', query)}"
+    summary = sanitize_untrusted_text(event.get("summary", query), 500)
+    return f"Takvim etkinliği silindi: {summary}"
 
 def get_upcoming_events(days: int = 365) -> list:
     """Önümüzdeki X gün içindeki etkinlikleri tüm takvimlerden döndür."""
     try:
+        days = max(1, min(int(days), 365))
         service = get_service()
         now = datetime.datetime.utcnow()
         end = now + datetime.timedelta(days=days)
@@ -127,7 +136,7 @@ def get_upcoming_events(days: int = 365) -> list:
                 ).execute()
 
                 for event in events_result.get("items", []):
-                    title = event.get("summary", "İsimsiz etkinlik")
+                    title = sanitize_untrusted_text(event.get("summary", "İsimsiz etkinlik"), 500)
                     start_str = event["start"].get("dateTime", event["start"].get("date"))
 
                     if "T" in start_str:
@@ -146,9 +155,9 @@ def get_upcoming_events(days: int = 365) -> list:
                         "title": title,
                         "start": start_dt,
                         "days_left": days_left,
-                        "description": event.get("description", ""),
+                        "description": sanitize_untrusted_text(event.get("description", ""), 4000),
                     })
-            except:
+            except (KeyError, TypeError, ValueError, OSError):
                 continue
 
         result.sort(key=lambda x: x["days_left"])

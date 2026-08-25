@@ -12,12 +12,7 @@ def handle_web_command(message: str) -> str:
         query = _extract_query(message, ["spotify'da", "spotifyda", "spotify da", "spotify'de", "spotify"])
         if query:
             os.startfile(f"spotify:search:{urllib.parse.quote(query)}")
-            import keyboard
-            time.sleep(3)
-            keyboard.press_and_release("enter")
-            time.sleep(0.3)
-            keyboard.press_and_release("enter")
-            return f"🎵 Spotify'da '{query}' çalınıyor..."
+            return f"🎵 Spotify'da '{query}' araması açıldı."
         else:
             os.startfile("spotify:")
             return "🎵 Spotify açıldı."

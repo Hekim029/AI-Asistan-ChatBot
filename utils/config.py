@@ -2,12 +2,14 @@ import os
 import sys
 from dotenv import load_dotenv
 
-load_dotenv()
-
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Çalışma dizinindeki saldırgan kontrollü bir .env yerine yalnızca uygulamanın
+# kendi kökündeki yapılandırmayı yükle.
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 
 MEMORY_DIR = os.path.join(BASE_DIR, "memory")
 
@@ -18,6 +20,7 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # Boş bırakılırsa yalnızca mevcut Groq + yerel komut katmanı kullanılır.
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").strip()
+HEKO_PROJECT_ROOT = os.getenv("HEKO_PROJECT_ROOT", BASE_DIR).strip()
 
 # YouTube Data API v3 — arama sonucundan direkt video açmak için kullanılır.
 # Yoksa sistem otomatik olarak arama sayfası açmaya geri döner (bozulmaz).

@@ -9,6 +9,11 @@ import uuid
 from datetime import datetime
 
 from utils.config import MEMORY_DIR
+from services.security import (
+    bounded_json_load,
+    contains_sensitive_data,
+    secure_write_json,
+)
 
 
 class TaskManager:
@@ -30,6 +35,10 @@ class TaskManager:
         text = (title or "").strip()
         if not text:
             raise ValueError("Görev başlığı boş olamaz.")
+        if len(text) > 1000:
+            raise ValueError("Görev başlığı 1000 karakter sınırını aşıyor.")
+        if contains_sensitive_data(text):
+            raise ValueError("Parola veya API anahtarı görevlerde saklanamaz.")
         due = ""
         if due_at:
             parsed = datetime.fromisoformat(due_at.strip().replace("Z", "+00:00"))
@@ -81,6 +90,10 @@ class TaskManager:
         content = (text or "").strip()
         if not content:
             raise ValueError("Not boş olamaz.")
+        if len(content) > 20_000:
+            raise ValueError("Not 20.000 karakter sınırını aşıyor.")
+        if contains_sensitive_data(content):
+            raise ValueError("Parola veya API anahtarı notlarda saklanamaz.")
         normalized = " ".join(content.casefold().split())
         clean_tags = []
         for tag in tags or []:
@@ -155,17 +168,13 @@ class TaskManager:
 
     def _load(self):
         try:
-            with open(self._save_path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
+            data = bounded_json_load(self._save_path)
             if isinstance(data, dict):
                 self._data["tasks"] = list(data.get("tasks") or [])
                 self._data["notes"] = list(data.get("notes") or [])
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
             pass
 
     def _save(self):
         os.makedirs(os.path.dirname(self._save_path), exist_ok=True)
-        temp_path = self._save_path + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as handle:
-            json.dump(self._data, handle, ensure_ascii=False, indent=2)
-        os.replace(temp_path, self._save_path)
+        secure_write_json(self._save_path, self._data)

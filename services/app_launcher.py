@@ -1,10 +1,11 @@
 import os
 import subprocess
 import re
+import shutil
+from pathlib import Path
 import keyboard
-from ctypes import cast, POINTER
-from comtypes import CLSCTX_ALL
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+from services.security import safe_error
 
 APPS = {
     "chrome": "chrome",
@@ -113,11 +114,12 @@ def volume_control(message: str) -> str | None:
     if m:
         level = int(m.group(1))
         level = max(0, min(100, level))
-        nircmd_level = int(level * 655.35)
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        nircmd = os.path.join(base, "nircmd.exe")
-        subprocess.run(f'"{nircmd}" setsysvolume {nircmd_level}', shell=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Harici nircmd.exe çalıştırmak yerine Windows medya tuşlarını kullan.
+        # Önce tabana indir, sonra yaklaşık %2'lik güvenli adımlarla yükselt.
+        for _ in range(50):
+            keyboard.press_and_release("volume down")
+        for _ in range(round(level / 2)):
+            keyboard.press_and_release("volume up")
         return f"🔊 Ses seviyesi %{level}'e ayarlandı."
 
     return None
@@ -127,20 +129,59 @@ def _open(app_name: str, executable: str) -> str | None:
         if executable.startswith("ms-"):
             os.startfile(executable)
         else:
-            subprocess.Popen(executable, shell=True,
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
+            resolved = _resolve_executable(executable)
+            if not resolved:
+                return None
+            subprocess.Popen(
+                [resolved],
+                shell=False,
+                cwd=str(Path(resolved).parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         return f"🚀 {app_name.capitalize()} açılıyor..."
     except Exception:
         return None
 
+
+def _resolve_executable(executable: str) -> str | None:
+    """Yalnızca sabit uygulama izin listesindeki gerçek yürütülebilirleri çözer."""
+    if executable not in set(APPS.values()):
+        return None
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    system32 = system_root / "System32"
+    fixed = {
+        "cmd": system32 / "cmd.exe",
+        "powershell": system32 / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+        "notepad": system32 / "notepad.exe",
+        "calc": system32 / "calc.exe",
+        "taskmgr": system32 / "Taskmgr.exe",
+        "explorer": system_root / "explorer.exe",
+    }
+    candidate = fixed.get(executable)
+    if candidate and candidate.is_file():
+        return str(candidate.resolve())
+    discovered = shutil.which(executable)
+    if not discovered:
+        return None
+    path = Path(discovered).resolve()
+    if not path.is_file() or path.suffix.casefold() not in {".exe", ".com"}:
+        return None
+    return str(path)
+
 def _kill(app_name: str, process: str) -> str:
     try:
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+        if not taskkill.is_file() or process not in set(PROCESS_NAMES.values()):
+            return "⚠️ Güvenli kapatma yardımcısı bulunamadı."
         subprocess.run(
-            ["taskkill", "/F", "/IM", process],
+            [str(taskkill), "/F", "/IM", process],
+            shell=False,
+            timeout=8,
+            check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
         return f"❌ {app_name.capitalize()} kapatıldı."
     except Exception as e:
-        return f"⚠️ Kapatma hatası: {str(e)}"
+        return f"⚠️ Kapatma hatası: {safe_error(e)}"
