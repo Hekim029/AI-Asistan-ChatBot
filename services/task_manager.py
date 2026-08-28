@@ -86,6 +86,47 @@ class TaskManager:
                     return dict(item)
         return None
 
+    def update_task(self, task_id: str, title: str, due_at: str = "") -> dict | None:
+        target_id = (task_id or "").strip().casefold()
+        text = (title or "").strip()
+        if not target_id:
+            raise ValueError("Düzenlenecek görev seçilemedi.")
+        if not text:
+            raise ValueError("Görev başlığı boş olamaz.")
+        if len(text) > 1000:
+            raise ValueError("Görev başlığı 1000 karakter sınırını aşıyor.")
+        if contains_sensitive_data(text):
+            raise ValueError("Parola veya API anahtarı görevlerde saklanamaz.")
+        due = ""
+        if due_at:
+            parsed = datetime.fromisoformat(due_at.strip().replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.astimezone()
+            due = parsed.isoformat(timespec="seconds")
+        with self._lock:
+            for item in self._data["tasks"]:
+                if item.get("id", "").casefold() == target_id:
+                    item["title"] = text
+                    item["due_at"] = due
+                    item["updated_at"] = datetime.now().astimezone().isoformat(
+                        timespec="seconds"
+                    )
+                    self._save()
+                    return dict(item)
+        return None
+
+    def delete_task(self, task_id: str) -> dict | None:
+        target_id = (task_id or "").strip().casefold()
+        if not target_id:
+            return None
+        with self._lock:
+            for index, item in enumerate(self._data["tasks"]):
+                if item.get("id", "").casefold() == target_id:
+                    removed = self._data["tasks"].pop(index)
+                    self._save()
+                    return dict(removed)
+        return None
+
     def add_note(self, text: str, tags: list[str] | None = None) -> dict:
         content = (text or "").strip()
         if not content:
@@ -165,6 +206,58 @@ class TaskManager:
                 item["_suggestion"] = True
             return suggestions
         return list(reversed(items))
+
+    def update_note(
+        self, note_id: str, text: str, tags: list[str] | None = None
+    ) -> dict | None:
+        target_id = (note_id or "").strip().casefold()
+        content = (text or "").strip()
+        if not target_id:
+            raise ValueError("Düzenlenecek not seçilemedi.")
+        if not content:
+            raise ValueError("Not boş olamaz.")
+        if len(content) > 20_000:
+            raise ValueError("Not 20.000 karakter sınırını aşıyor.")
+        if contains_sensitive_data(content):
+            raise ValueError("Parola veya API anahtarı notlarda saklanamaz.")
+        clean_tags = []
+        for tag in tags or []:
+            value = str(tag).strip().casefold()
+            if value and value not in clean_tags:
+                clean_tags.append(value)
+        words = set(" ".join(content.casefold().split()).replace("'", " ").split())
+        for inferred_tag, hints in self._TAG_HINTS.items():
+            if words.intersection(hints) and inferred_tag not in clean_tags:
+                clean_tags.append(inferred_tag)
+        normalized = " ".join(content.casefold().split())
+        with self._lock:
+            for existing in self._data["notes"]:
+                if existing.get("id", "").casefold() == target_id:
+                    continue
+                if " ".join(str(existing.get("text", "")).casefold().split()) == normalized:
+                    raise ValueError("Aynı içerikte başka bir not zaten var.")
+            for item in self._data["notes"]:
+                if item.get("id", "").casefold() == target_id:
+                    item["text"] = content
+                    item["tags"] = clean_tags[:5]
+                    item["updated_at"] = datetime.now().astimezone().isoformat(
+                        timespec="seconds"
+                    )
+                    self._save()
+                    return dict(item)
+        return None
+
+    def delete_note(self, note_id: str) -> dict | None:
+        target_id = (note_id or "").strip().casefold()
+        if not target_id:
+            return None
+        with self._lock:
+            for index, item in enumerate(self._data["notes"]):
+                if item.get("id", "").casefold() == target_id:
+                    removed = self._data["notes"].pop(index)
+                    self._save()
+                    return dict(removed)
+        return None
 
     def _load(self):
         try:

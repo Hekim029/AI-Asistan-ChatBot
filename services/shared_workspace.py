@@ -45,6 +45,40 @@ class SharedWorkspace:
             values = [item for item in values if item.get("session_id") != exclude_session]
         return list(reversed(values[-max(1, limit):]))
 
+    def update_event(self, event_id: str, title: str, content: str) -> dict | None:
+        target_id = (event_id or "").strip().casefold()
+        clean_title = redact_sensitive_data((title or "").strip())[:300]
+        clean_content = redact_sensitive_data((content or "").strip())[:6000]
+        if not target_id:
+            raise ValueError("Düzenlenecek çalışma seçilemedi.")
+        if not clean_title:
+            raise ValueError("Çalışma başlığı boş olamaz.")
+        if not clean_content:
+            raise ValueError("Çalışma içeriği boş olamaz.")
+        with self._lock:
+            for item in self._events:
+                if item.get("id", "").casefold() == target_id:
+                    item["title"] = clean_title
+                    item["content"] = clean_content
+                    item["updated_at"] = datetime.now().astimezone().isoformat(
+                        timespec="seconds"
+                    )
+                    self._save()
+                    return dict(item)
+        return None
+
+    def delete_event(self, event_id: str) -> dict | None:
+        target_id = (event_id or "").strip().casefold()
+        if not target_id:
+            return None
+        with self._lock:
+            for index, item in enumerate(self._events):
+                if item.get("id", "").casefold() == target_id:
+                    removed = self._events.pop(index)
+                    self._save()
+                    return dict(removed)
+        return None
+
     def formatted_context(self, session_id: str, limit: int = 8) -> str:
         events = self.recent(limit=limit, exclude_session=session_id)
         if not events:

@@ -75,6 +75,45 @@ class ReminderManager:
                     return dict(item)
         return None
 
+    def update(self, reminder_id: str, text: str, due_at: str) -> dict | None:
+        target_id = (reminder_id or "").strip().casefold()
+        message = (text or "").strip()
+        if not target_id:
+            raise ValueError("Düzenlenecek hatırlatıcı seçilemedi.")
+        if not message:
+            raise ValueError("Hatırlatıcı metni boş olamaz.")
+        if len(message) > 2000:
+            raise ValueError("Hatırlatıcı metni 2000 karakter sınırını aşıyor.")
+        if contains_sensitive_data(message):
+            raise ValueError("Parola veya API anahtarı hatırlatıcılarda saklanamaz.")
+        due = self._parse_due(due_at)
+        if due <= datetime.now().astimezone():
+            raise ValueError("Hatırlatıcı zamanı gelecekte olmalı.")
+        with self._lock:
+            for item in self._items:
+                if item.get("id", "").casefold() == target_id:
+                    item["text"] = message
+                    item["due_at"] = due.isoformat(timespec="seconds")
+                    item["status"] = "pending"
+                    item["updated_at"] = datetime.now().astimezone().isoformat(
+                        timespec="seconds"
+                    )
+                    self._save()
+                    return dict(item)
+        return None
+
+    def delete(self, reminder_id: str) -> dict | None:
+        target_id = (reminder_id or "").strip().casefold()
+        if not target_id:
+            return None
+        with self._lock:
+            for index, item in enumerate(self._items):
+                if item.get("id", "").casefold() == target_id:
+                    removed = self._items.pop(index)
+                    self._save()
+                    return dict(removed)
+        return None
+
     def pop_due(self, now: datetime | None = None) -> list[dict]:
         current = now or datetime.now().astimezone()
         if current.tzinfo is None:

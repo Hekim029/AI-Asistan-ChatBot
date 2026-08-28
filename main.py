@@ -6,20 +6,21 @@ import random
 if getattr(sys, 'frozen', False):
     os.chdir(os.path.dirname(sys.executable))
 
-ffmpeg_path = r"C:\Users\muham\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.0.1-full_build\bin"
-os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
-
 import keyboard
 from PySide6.QtWidgets import (
     QApplication, QWidget, QMenu, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 )
 from PySide6.QtCore import QTimer, Qt, Signal, QObject, QPoint, QRect
-from PySide6.QtGui import QPainter, QColor, QFont, QPixmap
+from PySide6.QtGui import QPainter, QColor, QFont, QPixmap, QPen
 from ui.chat_window import ChatWindow
 from services.error_logger import configure_logging
 from core.shared_state import SharedAssistantState
 from ui.session_manager_window import SessionManagerWindow
 from services.session_registry import SessionRegistry
+from services.speech_output import SpeechOutputManager
+from ui.pet_state import normalize_pet_state, pet_sprite_frame, resting_state
+import utils.config as config
+from utils.app_info import APP_DISPLAY_NAME, APP_VERSION, ORGANIZATION_NAME
 
 
 class HotkeySignal(QObject):
@@ -85,9 +86,11 @@ class FloatingButton(QWidget):
         self._anim_frame = 0
         self._blinking = False
         self._pet_state = "idle"
+        self._state_started_frame = 0
+        self._state_reset_target = "idle"
         self._state_timer = QTimer()
         self._state_timer.setSingleShot(True)
-        self._state_timer.timeout.connect(lambda: self.set_pet_state("idle"))
+        self._state_timer.timeout.connect(self._restore_timed_state)
         sprite_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "assets",
@@ -200,15 +203,30 @@ class FloatingButton(QWidget):
         self._blinking = False
         self._schedule_next_blink()
 
-    def set_pet_state(self, state: str, reset_after_ms: int = 0):
-        """Yapılan işe göre karakterin idle, busy veya alert pozunu gösterir."""
-        if state not in {"idle", "busy", "alert"}:
-            state = "idle"
-        self._pet_state = state
+    def set_pet_state(
+        self, state: str, reset_after_ms: int = 0, reset_state: str = "idle"
+    ):
+        """Karakter durumunu değiştirir ve istenirse güvenli duruma geri döner."""
+        self._pet_state = normalize_pet_state(state)
+        self._state_started_frame = self._anim_frame
+        self._state_reset_target = normalize_pet_state(reset_state)
         self._state_timer.stop()
         if reset_after_ms:
             self._state_timer.start(reset_after_ms)
+        state_labels = {
+            "idle": "Heko hazır",
+            "busy": "Heko çalışıyor",
+            "success": "İşlem tamamlandı",
+            "alert": "Heko dikkatini istiyor",
+            "listening": "Heko dinliyor",
+            "speaking": "Heko konuşuyor",
+            "sleeping": "Heko çevrimdışı",
+        }
+        self.setToolTip(state_labels[self._pet_state] + " — Sağ tık: Kapat")
         self.update()
+
+    def _restore_timed_state(self):
+        self.set_pet_state(self._state_reset_target)
 
     # ═════════════════════════════════════════
     #  Flash (yeni mesaj bildirimi)
@@ -261,6 +279,7 @@ class FloatingButton(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
 
         if self._sprite.isNull():
@@ -268,30 +287,106 @@ class FloatingButton(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "AI")
             return
 
+        # Durum efekti sprite'ın arkasında kalır; karakterin piksel dili bozulmaz.
+        phase = max(0, self._anim_frame - self._state_started_frame)
+        center_x = self.width() // 2
+        center_y = self.height() // 2
+        if self._pet_state == "busy":
+            arc_rect = QRect(10, 5, self.width() - 20, self.height() - 14)
+            painter.setPen(QPen(QColor(144, 91, 255, 155), 2))
+            painter.drawArc(arc_rect, int((-phase * 7) % 360) * 16, 105 * 16)
+            for offset in (0, 120, 240):
+                angle = math.radians((phase * 4 + offset) % 360)
+                x = center_x + int(math.cos(angle) * 51)
+                y = center_y + int(math.sin(angle) * 43)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(63, 210, 255, 190))
+                painter.drawEllipse(x - 2, y - 2, 4, 4)
+        elif self._pet_state == "listening":
+            for index in range(3):
+                progress = ((phase * 0.035) + index / 3) % 1.0
+                radius_x = 24 + int(progress * 34)
+                radius_y = 19 + int(progress * 27)
+                alpha = max(0, int(135 * (1.0 - progress)))
+                painter.setPen(QPen(QColor(45, 214, 255, alpha), 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(
+                    center_x - radius_x,
+                    center_y - radius_y,
+                    radius_x * 2,
+                    radius_y * 2,
+                )
+        elif self._pet_state == "speaking":
+            for index in range(3):
+                progress = ((phase * 0.045) + index / 3) % 1.0
+                width = 12 + int(progress * 30)
+                height = 18 + int(progress * 24)
+                alpha = max(0, int(175 * (1.0 - progress)))
+                painter.setPen(QPen(QColor(197, 103, 255, alpha), 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawArc(
+                    QRect(center_x + 4, center_y - height // 2, width, height),
+                    -70 * 16,
+                    140 * 16,
+                )
+        elif self._pet_state == "success":
+            glow = 80 + int(35 * (1 + math.sin(phase * 0.24)))
+            painter.setPen(QPen(QColor(83, 230, 164, glow), 3))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(12, 7, self.width() - 24, self.height() - 18)
+            for x, y in ((19, 20), (106, 25), (24, 89), (102, 85)):
+                size = 2 + ((phase // 4 + x) % 3)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(106, 255, 204, 190))
+                painter.drawEllipse(x - size, y - size, size * 2, size * 2)
+        elif self._pet_state == "alert":
+            pulse = 55 + int(60 * (1 + math.sin(phase * 0.32)) / 2)
+            painter.setPen(QPen(QColor(255, 58, 149, pulse), 3))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(9, 4, self.width() - 18, self.height() - 12)
+        elif self._pet_state == "sleeping":
+            painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            for index, (x, y) in enumerate(((91, 28), (102, 18), (112, 8))):
+                alpha = 80 + ((phase * 3 + index * 45) % 120)
+                painter.setPen(QColor(172, 137, 255, alpha))
+                painter.drawText(x, y, "z")
+
         # Yatay sprite şeridi: idle, blink, busy, alert.
         frame_w = self._sprite.width() // 4
         frame_h = self._sprite.height()
-        if self._pet_state == "busy":
-            frame_index = 2
-        elif self._pet_state == "alert" or (
-            self._is_flashing and self._flash_count % 2 == 0
-        ):
-            frame_index = 3
-        elif self._blinking:
-            frame_index = 1
-        else:
-            frame_index = 0
+        frame_index = pet_sprite_frame(
+            self._pet_state,
+            blinking=self._blinking,
+        )
         source = QRect(frame_index * frame_w, 0, frame_w, frame_h)
 
-        bounce = int(2 * math.sin(self._anim_frame * 0.12))
-        target = QRect(3, 2 + bounce, self.width() - 6, self.height() - 6)
+        speeds = {
+            "busy": 0.22,
+            "listening": 0.17,
+            "speaking": 0.19,
+            "sleeping": 0.06,
+        }
+        bounce = int(2 * math.sin(self._anim_frame * speeds.get(self._pet_state, 0.12)))
+        inset = 5 if self._pet_state == "success" else 3
+        target = QRect(inset, 2 + bounce, self.width() - inset * 2, self.height() - 6)
 
         painter.save()
+        if self._pet_state == "sleeping":
+            painter.setOpacity(0.62)
         if self._facing_left:
             painter.translate(self.width(), 0)
             painter.scale(-1, 1)
         painter.drawPixmap(target, self._sprite, source)
         painter.restore()
+        if self._pet_state == "speaking":
+            # Konuşma göstergesi sprite'ın sağında önde kalır; koyu arka planda
+            # kaybolmaması için yalnızca bu küçük dalga üst katmanda çizilir.
+            painter.setPen(QPen(QColor(221, 109, 255, 225), 3))
+            for index, x in enumerate((101, 109, 117)):
+                amplitude = 5 + int(
+                    5 * abs(math.sin((phase + index * 4) * 0.22))
+                )
+                painter.drawLine(x, center_y - amplitude, x, center_y + amplitude)
 
     # ═════════════════════════════════════════
     #  Fare olayları
@@ -503,11 +598,21 @@ class ThoughtBubble(QWidget):
 def main():
     configure_logging()
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setApplicationVersion(APP_VERSION)
+    app.setOrganizationName(ORGANIZATION_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     shared_state = SharedAssistantState()
+    speech = SpeechOutputManager(
+        auto_speak=getattr(config, "TTS_AUTO_SPEAK", False),
+        voice_id=getattr(config, "TTS_VOICE_ID", ""),
+        rate=getattr(config, "TTS_RATE", 0.0),
+        volume=getattr(config, "TTS_VOLUME", 0.85),
+    )
     session_registry = SessionRegistry()
     windows = {}
+    pet_feedback = {"wire": None}
 
     def _session_index(session_id):
         try:
@@ -517,7 +622,7 @@ def main():
 
     def _known_session_ids():
         ids = set(windows)
-        session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory", "sessions")
+        session_dir = os.path.join(config.MEMORY_DIR, "sessions")
         if os.path.isdir(session_dir):
             for name in os.listdir(session_dir):
                 if name.startswith("chat-") and name.endswith(".json"):
@@ -548,10 +653,13 @@ def main():
             shared_state=shared_state,
             session_id=session_id,
             display_name=session_registry.name_for(session_id, f"Sohbet {index}"),
+            speech_manager=speech,
         )
         windows[session_id] = chat_window
         chat_window.new_window_requested.connect(_show_new_chat)
         chat_window.sessions_requested.connect(_show_session_manager)
+        if pet_feedback["wire"]:
+            pet_feedback["wire"](chat_window)
         return chat_window
 
     def _show_new_chat():
@@ -601,25 +709,85 @@ def main():
     button = FloatingButton(chat)
     bubble = ThoughtBubble()
 
-    def _current_task_title() -> str:
-        for item in reversed(chat.router.get_history(limit=6)):
+    active_sessions = set()
+
+    def _current_task_title(target_chat: ChatWindow) -> str:
+        for item in reversed(target_chat.router.get_history(limit=6)):
             if item.get("role") == "user":
                 return item.get("content", "Heko çalışıyor")
         return "Heko çalışıyor"
 
-    def _handle_status(text: str):
+    def _rest_state() -> str:
+        return resting_state(bool(active_sessions))
+
+    def _handle_activity(target_chat: ChatWindow, active: bool):
+        if active:
+            active_sessions.add(target_chat.session_id)
+            button.set_pet_state("busy")
+        else:
+            active_sessions.discard(target_chat.session_id)
+            if button._pet_state == "busy":
+                button.set_pet_state(_rest_state())
+
+    def _handle_status(target_chat: ChatWindow, text: str):
+        active_sessions.add(target_chat.session_id)
         button.set_pet_state("busy")
-        if not chat.isVisible():
-            bubble.show_status(button, text, _current_task_title())
+        if not target_chat.isVisible():
+            bubble.show_status(button, text, _current_task_title(target_chat))
 
-    def _handle_final(response: str):
+    def _handle_final(target_chat: ChatWindow, response: str):
         button.start_flash()
-        button.set_pet_state("alert", reset_after_ms=3500)
-        if not chat.isVisible():
-            bubble.show_final(button, response, _current_task_title())
+        button.set_pet_state(
+            "success", reset_after_ms=2600, reset_state=_rest_state()
+        )
+        if not target_chat.isVisible():
+            bubble.show_final(
+                button, response, _current_task_title(target_chat)
+            )
 
-    chat._on_status_callback = _handle_status
-    chat._on_response_callback = _handle_final
+    def _handle_error(target_chat: ChatWindow, error: str):
+        button.set_pet_state(
+            "alert", reset_after_ms=4200, reset_state=_rest_state()
+        )
+        if not target_chat.isVisible():
+            bubble.show_final(button, f"İşlem tamamlanamadı: {error}", "Hata")
+
+    def _handle_presence(state: str):
+        if active_sessions and state in {"idle", "sleeping"}:
+            button.set_pet_state("busy")
+            return
+        reset_ms = 2200 if state == "alert" else 0
+        button.set_pet_state(state, reset_ms, _rest_state())
+
+    def _handle_speech_state(state: str):
+        if state == "speaking":
+            button.set_pet_state("speaking")
+        elif state == "error":
+            button.set_pet_state(
+                "alert", reset_after_ms=2600, reset_state=_rest_state()
+            )
+        elif state == "ready" and button._pet_state == "speaking":
+            button.set_pet_state(_rest_state())
+
+    def _wire_chat_feedback(target_chat: ChatWindow):
+        target_chat._on_activity_callback = (
+            lambda active, window=target_chat: _handle_activity(window, active)
+        )
+        target_chat._on_status_callback = (
+            lambda text, window=target_chat: _handle_status(window, text)
+        )
+        target_chat._on_response_callback = (
+            lambda response, window=target_chat: _handle_final(window, response)
+        )
+        target_chat._on_error_callback = (
+            lambda error, window=target_chat: _handle_error(window, error)
+        )
+        target_chat._on_presence_callback = _handle_presence
+
+    pet_feedback["wire"] = _wire_chat_feedback
+    for open_chat in windows.values():
+        _wire_chat_feedback(open_chat)
+    speech.state_changed.connect(_handle_speech_state)
     button._on_chat_opened = bubble.hide
 
     def _check_due_reminders():
@@ -628,7 +796,9 @@ def main():
             chat.router.context.add_message("assistant", message)
             chat._add_message(message, is_user=False)
             button.start_flash()
-            button.set_pet_state("alert", reset_after_ms=5000)
+            button.set_pet_state(
+                "alert", reset_after_ms=5000, reset_state=_rest_state()
+            )
             QApplication.beep()
             if not chat.isVisible():
                 bubble.show_final(button, message, "Hatırlatıcı")

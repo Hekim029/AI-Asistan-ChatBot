@@ -6,15 +6,15 @@ a = Analysis(
     pathex=[],
     binaries=[],
     # Kullanıcı verileri, OAuth tokenı ve credentials pakete gömülmez.
-    # Uygulama ilk çalıştırmada memory/ klasörünü EXE yanında oluşturur.
-    datas=[('assets', 'assets')],
+    # Paketli uygulama verileri %LOCALAPPDATA%/HekoAI/data altında tutulur.
+    datas=[('assets', 'assets'), ('evals/scenarios.json', 'evals')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
         'torch', 'torchvision', 'torchaudio', 'tensorflow',
-        'numba', 'llvmlite', 'sympy', 'matplotlib', 'pandas',
+        'scipy', 'numba', 'llvmlite', 'sympy', 'matplotlib', 'pandas',
     ],
     noarchive=False,
     optimize=0,
@@ -40,4 +40,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version='version_info.txt',
 )

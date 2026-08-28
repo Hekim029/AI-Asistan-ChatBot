@@ -26,6 +26,22 @@
 - Gerçek uygulama onaylı ve proje köküyle sınırlı proje dosyası silme
 - Kullanıcı arayüzünden gizlenen iç onay protokolü ve SHA bilgisi
 - Boyut, symlink, şifreleme ve arşiv bombası korumalı PDF/DOCX okuyucu
+- Ayarlardan Ollama model seçimi, güvenli loopback bağlantı testi ve anlık geçiş
+- Sade sekmeli Ayarlar görünümü ve ortak veride manuel Kontrol Merkezi düzenleme
+- Varsayılan kapalı; Ayarlar'dan açılan, açık onaylı, bellekte tek-kare ve kalıcı
+  dosya bırakmayan deneysel ekran farkındalığı
+- Çalışma halkası, dinleme dalgası, başarı parlaması, uyarı nabzı ve uyku hâline
+  sahip; tüm açık sohbetlerin durumunu izleyen masaüstü karakteri
+- API gerektirmeyen gerçek kullanım senaryoları, kategori puanları, Sistem
+  Kontrolü entegrasyonu ve isteğe bağlı Ollama kişilik değerlendirmesi
+- Windows'un yerel SAPI/WinRT motorunu kullanan, mesaj bazlı ve otomatik okuma
+  seçenekli, çoklu pencerede çakışmayan çevrimdışı sesli yanıt
+- Konuşma modu, özel kişilik metni, mesaj renkleri ve ses tercihlerinin yeniden
+  başlatmalar arasında güvenli biçimde korunması
+- Paketli sürüm verilerinin kullanıcıya özel yazılabilir uygulama dizininde
+  tutulması ve eski EXE-yanı kayıtların sınırlı bir kez taşınması
+- Semantik `0.1.0` sürüm bilgisi, Windows ürün meta verisi ve test–kalite–güvenlik
+  taramalarını zorunlu kılan tek komutluk yayın betiği
 
 ## Çoklu sohbet davranışı
 
@@ -49,11 +65,7 @@ OLLAMA_URL=http://127.0.0.1:11434
 Yerel model tanımlı değilse mevcut Groq davranışı korunur. Yerel araç komutları
 model kurulmasa da çalışır.
 
-## Kalan sağlamlaştırma işleri
+## Sıradaki aşama
 
-1. Kullanıcı izinli ekran görüntüsü farkındalığı
-2. Ollama model seçimi ve bağlantı testinin Ayarlar ekranına eklenmesi
-3. Daha kapsamlı karakter animasyonları
-
-Bu maddeler dış uygulama kurulumu, yeni dosya yazma yetkileri veya görsel algı
-akışı gerektirdiği için temel mimariden ayrı sağlamlaştırma aşamasında ele alınır.
+1. İlk ölçümlere göre model/prompt kişiselleştirme planını hazırlamak
+2. İmzalı kurulum paketi ve temiz makinede dağıtım testi

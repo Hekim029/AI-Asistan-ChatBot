@@ -4,8 +4,7 @@ import winreg
 from pathlib import Path
 
 from utils.config import BASE_DIR
-
-APP_NAME = "HekoAI"
+from utils.app_info import APP_NAME
 
 def get_executable_path() -> str:
     if getattr(sys, "frozen", False):

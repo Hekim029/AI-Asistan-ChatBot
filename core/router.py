@@ -237,6 +237,7 @@ class Router:
         "update_project_file": "Kod değişikliği önizlemesi hazırlanıyor...",
         "delete_project_file": "Proje dosyası için güvenli silme onayı hazırlanıyor...",
         "read_document":       "Belgeden güvenli biçimde metin çıkarılıyor...",
+        "analyze_screen":      "Onaylanan ekran görüntüsü inceleniyor...",
         "send_email":          "Mail gönderiliyor...",
         "get_system_status":   "Sistem durumu kontrol ediliyor...",
         "remember_about_user": "Not alınıyor...",

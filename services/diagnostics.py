@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 
 import utils.config as config
 
@@ -33,14 +32,27 @@ def run_diagnostics() -> list[dict]:
         "Bağlı" if os.path.exists(token) else "İlk kullanımda giriş istenecek",
     )
     add(
-        "FFmpeg",
-        bool(shutil.which("ffmpeg")),
-        shutil.which("ffmpeg") or "PATH içinde bulunamadı",
-    )
-    add(
         "Mikrofon altyapısı",
         importlib.util.find_spec("sounddevice") is not None,
         "sounddevice hazır" if importlib.util.find_spec("sounddevice") else "sounddevice eksik",
+    )
+    speech_module = importlib.util.find_spec("PySide6.QtTextToSpeech")
+    speech_engines = []
+    if speech_module is not None:
+        try:
+            from PySide6.QtTextToSpeech import QTextToSpeech
+            speech_engines = [
+                name for name in QTextToSpeech.availableEngines() if name != "mock"
+            ]
+        except (ImportError, RuntimeError):
+            speech_engines = []
+    add(
+        "Yerel sesli yanıt altyapısı",
+        bool(speech_engines),
+        (
+            "Windows motorları: " + ", ".join(speech_engines)
+            if speech_engines else "SAPI/WinRT konuşma motoru bulunamadı"
+        ),
     )
     add(
         "Google API kitaplıkları",
@@ -52,4 +64,18 @@ def run_diagnostics() -> list[dict]:
         os.access(config.MEMORY_DIR, os.W_OK),
         config.MEMORY_DIR,
     )
+    try:
+        from evals.evaluator import run_offline_suite, summarize_results
+        quality = summarize_results(run_offline_suite())
+        add(
+            "Yerel kalite senaryoları",
+            quality["failed"] == 0,
+            (
+                f"%{quality['score']:.1f} — {quality['passed']}/"
+                f"{quality['measured']} senaryo başarılı"
+            ),
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        from services.security import safe_error
+        add("Yerel kalite senaryoları", False, safe_error(exc))
     return checks

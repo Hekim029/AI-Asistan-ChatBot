@@ -20,7 +20,8 @@ Korunan başlıca riskler:
 ## Uygulanan sınırlar
 
 - Silme, e-posta/takvim değişikliği, proje kodu yazma, geçmiş/hafıza temizleme
-  ve zorla uygulama kapatma iki aşamalı, süreli kullanıcı onayı ister.
+  zorla uygulama kapatma ve ekran görüntüsü analizi iki aşamalı, süreli kullanıcı
+  onayı ister.
 - Süreç çalıştırma allowlist ile sınırlandırılır; kullanıcı girdisi shell'e
   verilmez. Sohbetten yürütülebilir dosya ve kısayol açılmaz.
 - Proje yazma; kök dizin, uzantı, hassas yol, symlink, SHA-256 sürümü, diff,
@@ -39,6 +40,20 @@ Korunan başlıca riskler:
   Ollama istemcisi proxy ortam değişkenlerini kullanmaz.
 - Model sistem talimatı; e-posta, dosya, web sonucu ve ortak pencere içeriklerini
   güvenilmeyen veri sayar.
+- Ekran görüntüsü onay verilmeden alınmaz. Onaydan sonra sohbet penceresi gizlenir,
+  etkin ekrandan tek kare alınır, en fazla 1600×1200 boyutuna küçültülüp yalnızca
+  bellekte JPEG olarak tutulur ve Groq görsel analiz API'sine gönderilir. Görüntü
+  dosyaya, konuşma geçmişine, ortak çalışma alanına veya hata günlüğüne yazılmaz.
+  Özellik varsayılan olarak kapalıdır; Ayarlar > Sistem bölümünden açılmadıkça
+  ekran yakalama veya görsel analiz ağ isteği başlatılamaz.
+- Metinden sese yanıtlar QtTextToSpeech aracılığıyla Windows'un yerel SAPI/WinRT
+  motorunda üretilir. Bu özellik ses üretmek için bir ağ API'sine istek atmaz.
+- Paketli sürüm kişisel verileri EXE veya kurulum klasörüne değil, kullanıcıya
+  özel `%LOCALAPPDATA%\HekoAI\data` dizinine atomik yazımla kaydeder. Eski
+  EXE-yanı veriler yalnızca tanınan dosya adları, dosya sayısı ve boyut
+  sınırlarıyla boş hedefe bir kez kopyalanır; sembolik bağlantılar izlenmez.
+  Kod blokları, URL'ler, iç onay protokolü ve aşırı uzun metinler konuşma öncesi
+  temizlenir. Tüm sohbetler tek motoru paylaşır; yeni okuma önceki sesi keser.
 
 ## Kalan riskler
 
@@ -48,7 +63,8 @@ dosyalarını okuyabilir. Kullanıcının bizzat onayladığı kötü bir işlem
 verebilir. Model tabanlı prompt injection savunması olasılığı azaltır ancak
 matematiksel güvence sağlamaz. Ekran/klavye otomasyonu öndeki yanlış pencereyi
 etkileyebilir. Bulut modeline gönderilen normal sohbet içeriği ilgili sağlayıcının
-gizlilik koşullarına tabidir.
+gizlilik koşullarına tabidir. Kullanıcının onayladığı ekran karesi de analiz için
+Groq'a gönderildiğinden, onaylamadan önce ekrandaki özel içerikler kapatılmalıdır.
 
 Bu nedenle gerçek API anahtarlarını sohbete yapıştırmayın, `.env` ve
 `credentials.json` dosyalarını Git'e eklemeyin, Windows hesabını ve depoyu özel

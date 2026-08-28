@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextEdit, QApplication
+    QPushButton, QTextEdit, QApplication, QTabWidget, QCheckBox, QMessageBox,
+    QComboBox, QSlider,
 )
 from PySide6.QtCore import Qt, Signal, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPainterPath
@@ -10,6 +11,9 @@ from ui.memory_window import MemoryWindow
 from ui.diagnostics_window import DiagnosticsWindow
 from ui.organizer_window import OrganizerWindow
 from ui.daily_settings_window import DailySettingsWindow
+from ui.local_model_settings_window import LocalModelSettingsWindow
+from services.app_settings import save_app_settings
+from utils.app_info import APP_VERSION
 
 COLOR_PAIRS = [
     ("#4a9eff", "#1e242c", "Okyanus"),
@@ -70,6 +74,8 @@ class SettingsWindow(QWidget):
         reminder_manager=None,
         daily_briefing_service=None,
         shared_workspace=None,
+        llm_client=None,
+        speech_manager=None,
     ):
         super().__init__()
         self._drag_pos = None
@@ -86,11 +92,13 @@ class SettingsWindow(QWidget):
             DailySettingsWindow(daily_briefing_service)
             if daily_briefing_service is not None else None
         )
+        self._local_model_window = LocalModelSettingsWindow(llm_client)
+        self._speech = speech_manager
         self._setup_window()
         self._setup_ui()
 
     def _setup_window(self):
-        self.setFixedSize(380, 660)
+        self.setFixedSize(560, 620)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -126,12 +134,12 @@ class SettingsWindow(QWidget):
 
     def _build_header(self):
         header = QWidget()
-        header.setFixedHeight(48)
+        header.setFixedHeight(54)
         header.setStyleSheet("background-color: #0d1117; border-radius: 12px;")
         h = QHBoxLayout(header)
         h.setContentsMargins(16, 0, 16, 0)
-        title = QLabel("⚙  Ayarlar")
-        title.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        title = QLabel(f"⚙  Heko Ayarları  ·  v{APP_VERSION}")
+        title.setFont(QFont("Segoe UI", 11, QFont.Bold))
         title.setStyleSheet("color: #e6edf3;")
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
@@ -152,22 +160,46 @@ class SettingsWindow(QWidget):
 
     def _build_content(self):
         content = QVBoxLayout()
-        content.setContentsMargins(20, 16, 20, 20)
+        content.setContentsMargins(18, 14, 18, 18)
         content.setSpacing(12)
 
-        mode_label = QLabel("🎭  Mod Seç")
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.tabBar().setExpanding(True)
+        tabs.tabBar().setUsesScrollButtons(False)
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                background:#161b22; border:1px solid #30363d;
+                border-radius:10px; top:-1px;
+            }
+            QTabBar::tab {
+                background:#0d1117; color:#8b949e; border:none;
+                border-bottom:2px solid transparent; padding:10px 22px;
+            }
+            QTabBar::tab:selected { color:#e6edf3; border-bottom-color:#4a9eff; }
+            QTabBar::tab:hover { color:#c9d1d9; }
+        """)
+
+        assistant_page = QWidget()
+        assistant_layout = QVBoxLayout(assistant_page)
+        assistant_layout.setContentsMargins(18, 18, 18, 18)
+        assistant_layout.setSpacing(12)
+
+        mode_label = QLabel("Konuşma modu")
         mode_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        mode_label.setStyleSheet("color: #8b949e;")
+        mode_label.setStyleSheet("color:#c9d1d9;")
+        mode_help = QLabel("Hazır bir kişilik seç veya aşağıdaki metni kendine göre düzenle.")
+        mode_help.setStyleSheet("color:#6e7681;font-size:9px;")
 
         mode_layout = QHBoxLayout()
-        mode_layout.setSpacing(6)
+        mode_layout.setSpacing(8)
         self._mode_buttons = {}
 
         for mode_name in config.MODES.keys():
             btn = QPushButton(mode_name.capitalize())
             btn.setCheckable(True)
-            btn.setFixedHeight(30)
-            btn.setFont(QFont("Segoe UI", 8))
+            btn.setFixedHeight(34)
+            btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: #0d1117; color: #8b949e;
@@ -180,11 +212,12 @@ class SettingsWindow(QWidget):
             mode_layout.addWidget(btn)
             self._mode_buttons[mode_name] = btn
 
-        self._mode_buttons["normal"].setChecked(True)
+        active_mode = getattr(config, "CURRENT_MODE", "normal")
+        self._mode_buttons.get(active_mode, self._mode_buttons["normal"]).setChecked(True)
 
-        prompt_label = QLabel("🤖  Asistan Kişiliği")
+        prompt_label = QLabel("Asistan kişiliği")
         prompt_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        prompt_label.setStyleSheet("color: #8b949e;")
+        prompt_label.setStyleSheet("color:#c9d1d9;")
 
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setPlainText(config.SYSTEM_PROMPT)
@@ -196,14 +229,30 @@ class SettingsWindow(QWidget):
             }
             QTextEdit:focus { border: 1px solid #4a9eff; }
         """)
-        self._prompt_edit.setFixedHeight(140)
+        self._prompt_edit.setMinimumHeight(245)
 
-        color_label = QLabel("🎨  Tema Seç  —  ◑  Sol: Sen  |  Sağ: AI")
+        assistant_layout.addWidget(mode_label)
+        assistant_layout.addWidget(mode_help)
+        assistant_layout.addLayout(mode_layout)
+        assistant_layout.addSpacing(4)
+        assistant_layout.addWidget(prompt_label)
+        assistant_layout.addWidget(self._prompt_edit, 1)
+
+        appearance_page = QWidget()
+        appearance_layout = QVBoxLayout(appearance_page)
+        appearance_layout.setContentsMargins(18, 18, 18, 18)
+        appearance_layout.setSpacing(14)
+        color_label = QLabel("Mesaj renkleri")
         color_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        color_label.setStyleSheet("color: #8b949e;")
+        color_label.setStyleSheet("color:#c9d1d9;")
+        color_help = QLabel(
+            "Her dairenin sol yarısı senin, sağ yarısı Heko'nun mesaj rengini gösterir."
+        )
+        color_help.setWordWrap(True)
+        color_help.setStyleSheet("color:#6e7681;font-size:9px;")
 
         color_layout = QHBoxLayout()
-        color_layout.setSpacing(8)
+        color_layout.setSpacing(14)
         self._split_buttons = []
         for user_color, ai_color, name in COLOR_PAIRS:
             btn = SplitColorButton(user_color, ai_color, name)
@@ -212,12 +261,167 @@ class SettingsWindow(QWidget):
             self._split_buttons.append(btn)
         color_layout.addStretch()
 
-        startup_label = QLabel("🚀  Başlangıç")
+        preview = QLabel(
+            "Tema değişikliği kaydedildiğinde açık sohbet penceresine hemen uygulanır."
+        )
+        preview.setWordWrap(True)
+        preview.setStyleSheet(
+            "background:#0d1117;color:#8b949e;border:1px solid #30363d;"
+            "border-radius:9px;padding:14px;"
+        )
+        appearance_layout.addWidget(color_label)
+        appearance_layout.addWidget(color_help)
+        appearance_layout.addLayout(color_layout)
+        appearance_layout.addWidget(preview)
+        appearance_layout.addStretch()
+
+        voice_page = QWidget()
+        voice_layout = QVBoxLayout(voice_page)
+        voice_layout.setContentsMargins(18, 18, 18, 18)
+        voice_layout.setSpacing(12)
+
+        voice_title = QLabel("Sesli yanıt")
+        voice_title.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        voice_title.setStyleSheet("color:#e6edf3;")
+        voice_intro = QLabel(
+            "Heko, Windows'un yerel konuşma motorunu kullanır; metin bir ses "
+            "API'sine gönderilmez. Yeni okuma önceki sesi keser."
+        )
+        voice_intro.setWordWrap(True)
+        voice_intro.setStyleSheet("color:#8b949e;font-size:9px;")
+
+        voice_status = self._speech.status() if self._speech else {
+            "available": False,
+            "message": "Ses yöneticisi bağlı değil.",
+        }
+        self._voice_status_label = QLabel(voice_status["message"])
+        self._voice_status_label.setWordWrap(True)
+        self._voice_status_label.setStyleSheet(
+            "background:#0d1117;color:"
+            + (
+                "#3fb950"
+                if voice_status.get("turkish_available") else "#e3b341"
+            )
+            + ";border:1px solid #30363d;border-radius:8px;padding:10px;"
+        )
+
+        self._tts_auto_checkbox = QCheckBox("Heko yanıtlarını otomatik seslendir")
+        self._tts_auto_checkbox.setChecked(
+            bool(getattr(config, "TTS_AUTO_SPEAK", False))
+        )
+        if not voice_status["available"]:
+            self._tts_auto_checkbox.setChecked(False)
+            self._tts_auto_checkbox.setEnabled(False)
+        self._tts_auto_checkbox.setStyleSheet(
+            self._screen_vision_checkbox.styleSheet()
+            if hasattr(self, "_screen_vision_checkbox") else
+            "QCheckBox{color:#e6edf3;}"
+        )
+
+        voice_select_label = QLabel("Windows sesi")
+        voice_select_label.setStyleSheet("color:#c9d1d9;font-weight:600;")
+        self._voice_combo = QComboBox()
+        self._voice_combo.setFixedHeight(36)
+        self._voice_combo.setStyleSheet("""
+            QComboBox {
+                background:#0d1117;color:#e6edf3;border:1px solid #30363d;
+                border-radius:8px;padding:0 10px;
+            }
+            QComboBox:focus { border-color:#4a9eff; }
+            QComboBox QAbstractItemView {
+                background:#161b22;color:#e6edf3;selection-background-color:#1f4f8f;
+            }
+        """)
+        voice_options = self._speech.voice_options() if self._speech else []
+        selected_voice = getattr(config, "TTS_VOICE_ID", "")
+        for row in voice_options:
+            label = f"{row['name']} — {row['locale']} ({row['gender']})"
+            self._voice_combo.addItem(label, row["id"])
+        if not voice_options:
+            self._voice_combo.addItem("Windows konuşma sesi bulunamadı", "")
+            self._voice_combo.setEnabled(False)
+        else:
+            index = self._voice_combo.findData(selected_voice)
+            self._voice_combo.setCurrentIndex(index if index >= 0 else 0)
+
+        self._rate_value = QLabel()
+        self._rate_value.setStyleSheet("color:#8b949e;")
+        rate_row = QHBoxLayout()
+        rate_label = QLabel("Konuşma hızı")
+        rate_label.setStyleSheet("color:#c9d1d9;")
+        self._rate_slider = QSlider(Qt.Horizontal)
+        self._rate_slider.setRange(-10, 10)
+        self._rate_slider.setValue(round(getattr(config, "TTS_RATE", 0.0) * 10))
+        self._rate_slider.valueChanged.connect(self._update_voice_value_labels)
+        rate_row.addWidget(rate_label)
+        rate_row.addWidget(self._rate_slider, 1)
+        rate_row.addWidget(self._rate_value)
+
+        self._volume_value = QLabel()
+        self._volume_value.setStyleSheet("color:#8b949e;")
+        volume_row = QHBoxLayout()
+        volume_label = QLabel("Ses seviyesi")
+        volume_label.setStyleSheet("color:#c9d1d9;")
+        self._volume_slider = QSlider(Qt.Horizontal)
+        self._volume_slider.setRange(0, 100)
+        self._volume_slider.setValue(round(getattr(config, "TTS_VOLUME", 0.85) * 100))
+        self._volume_slider.valueChanged.connect(self._update_voice_value_labels)
+        volume_row.addWidget(volume_label)
+        volume_row.addWidget(self._volume_slider, 1)
+        volume_row.addWidget(self._volume_value)
+        self._update_voice_value_labels()
+
+        voice_buttons = QHBoxLayout()
+        test_voice_btn = QPushButton("▶  Sesi dene")
+        stop_voice_btn = QPushButton("■  Durdur")
+        for button in (test_voice_btn, stop_voice_btn):
+            button.setFixedHeight(36)
+            button.setStyleSheet("""
+                QPushButton {
+                    background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+                    border-radius:8px;
+                }
+                QPushButton:hover { border-color:#4a9eff;color:white; }
+            """)
+        test_voice_btn.setEnabled(bool(self._speech and voice_options))
+        stop_voice_btn.setEnabled(bool(self._speech))
+        test_voice_btn.clicked.connect(self._test_voice)
+        stop_voice_btn.clicked.connect(
+            lambda: self._speech.stop() if self._speech else None
+        )
+        voice_buttons.addWidget(test_voice_btn)
+        voice_buttons.addWidget(stop_voice_btn)
+
+        install_help = QLabel(
+            "Ses bulunamazsa Windows Ayarları > Saat ve dil > Konuşma bölümünden "
+            "Türkçe bir ses paketi ekleyip Heko'yu yeniden başlat."
+        )
+        install_help.setWordWrap(True)
+        install_help.setStyleSheet("color:#6e7681;font-size:8px;")
+
+        voice_layout.addWidget(voice_title)
+        voice_layout.addWidget(voice_intro)
+        voice_layout.addWidget(self._voice_status_label)
+        voice_layout.addWidget(self._tts_auto_checkbox)
+        voice_layout.addWidget(voice_select_label)
+        voice_layout.addWidget(self._voice_combo)
+        voice_layout.addLayout(rate_row)
+        voice_layout.addLayout(volume_row)
+        voice_layout.addLayout(voice_buttons)
+        voice_layout.addWidget(install_help)
+        voice_layout.addStretch()
+
+        system_page = QWidget()
+        system_layout = QVBoxLayout(system_page)
+        system_layout.setContentsMargins(18, 18, 18, 18)
+        system_layout.setSpacing(12)
+
+        startup_label = QLabel("Windows başlangıcı")
         startup_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        startup_label.setStyleSheet("color: #8b949e;")
+        startup_label.setStyleSheet("color:#c9d1d9;")
 
         startup_row = QHBoxLayout()
-        startup_desc = QLabel("Windows açılınca otomatik başlat")
+        startup_desc = QLabel("Bilgisayar açıldığında Heko'yu otomatik çalıştır")
         startup_desc.setFont(QFont("Segoe UI", 8))
         startup_desc.setStyleSheet("color: #8b949e;")
 
@@ -232,8 +436,42 @@ class SettingsWindow(QWidget):
         startup_row.addStretch()
         startup_row.addWidget(self._startup_btn)
 
-        memory_btn = QPushButton("Hafızayı Yönet")
-        memory_btn.setFixedHeight(34)
+        privacy_label = QLabel("Gizlilik ve deneysel özellikler")
+        privacy_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        privacy_label.setStyleSheet("color:#c9d1d9;")
+
+        vision_card = QWidget()
+        vision_card.setStyleSheet(
+            "background:#0d1117;border:1px solid #30363d;border-radius:8px;"
+        )
+        vision_layout = QVBoxLayout(vision_card)
+        vision_layout.setContentsMargins(12, 9, 12, 9)
+        vision_layout.setSpacing(3)
+        self._screen_vision_checkbox = QCheckBox("Deneysel ekran farkındalığı")
+        self._screen_vision_checkbox.setChecked(
+            bool(getattr(config, "SCREEN_VISION_ENABLED", False))
+        )
+        self._screen_vision_checkbox.setStyleSheet("""
+            QCheckBox { color:#e6edf3;border:none;font-weight:600; }
+            QCheckBox::indicator {
+                width:16px;height:16px;border:1px solid #484f58;
+                border-radius:4px;background:#161b22;
+            }
+            QCheckBox::indicator:checked {
+                background:#1f6feb;border-color:#4a9eff;
+            }
+        """)
+        vision_help = QLabel(
+            "Varsayılan olarak kapalıdır. Açık olsa bile yalnızca komutundan "
+            "ve ayrıca verdiğin onaydan sonra tek kare Groq'a gönderilir."
+        )
+        vision_help.setWordWrap(True)
+        vision_help.setStyleSheet("color:#8b949e;border:none;font-size:8px;")
+        vision_layout.addWidget(self._screen_vision_checkbox)
+        vision_layout.addWidget(vision_help)
+
+        memory_btn = QPushButton("Hafıza")
+        memory_btn.setFixedHeight(42)
         memory_btn.setEnabled(self._memory_window is not None)
         memory_btn.setStyleSheet("""
             QPushButton {
@@ -246,26 +484,31 @@ class SettingsWindow(QWidget):
             memory_btn.clicked.connect(self._open_memory)
 
         diagnostics_btn = QPushButton("Sistem Kontrolü")
-        diagnostics_btn.setFixedHeight(34)
+        diagnostics_btn.setFixedHeight(42)
         diagnostics_btn.setStyleSheet(memory_btn.styleSheet())
         diagnostics_btn.clicked.connect(self._open_diagnostics)
 
-        organizer_btn = QPushButton("Kontrol Merkezini Aç")
-        organizer_btn.setFixedHeight(34)
+        organizer_btn = QPushButton("Kontrol Merkezi")
+        organizer_btn.setFixedHeight(42)
         organizer_btn.setEnabled(self._organizer_window is not None)
         organizer_btn.setStyleSheet(memory_btn.styleSheet())
         if self._organizer_window is not None:
             organizer_btn.clicked.connect(self._open_organizer)
 
-        daily_btn = QPushButton("Günlük Özet Ayarları")
-        daily_btn.setFixedHeight(34)
+        daily_btn = QPushButton("Günlük Özet")
+        daily_btn.setFixedHeight(42)
         daily_btn.setEnabled(self._daily_settings_window is not None)
         daily_btn.setStyleSheet(memory_btn.styleSheet())
         if self._daily_settings_window is not None:
             daily_btn.clicked.connect(self._open_daily_settings)
 
+        local_model_btn = QPushButton("Yerel Model (Ollama)")
+        local_model_btn.setFixedHeight(42)
+        local_model_btn.setStyleSheet(memory_btn.styleSheet())
+        local_model_btn.clicked.connect(self._open_local_model_settings)
+
         save_btn = QPushButton("💾  Kaydet")
-        save_btn.setFixedHeight(38)
+        save_btn.setFixedHeight(42)
         save_btn.setFont(QFont("Segoe UI", 9, QFont.Bold))
         save_btn.setStyleSheet("""
             QPushButton { background-color: #1f4f8f; color: #e6edf3; border: none; border-radius: 8px; }
@@ -273,22 +516,34 @@ class SettingsWindow(QWidget):
         """)
         save_btn.clicked.connect(self._save)
 
-        content.addWidget(mode_label)
-        content.addLayout(mode_layout)
-        content.addWidget(prompt_label)
-        content.addWidget(self._prompt_edit)
-        content.addWidget(color_label)
-        content.addLayout(color_layout)
-        content.addWidget(startup_label)
-        content.addLayout(startup_row)
+        system_layout.addWidget(startup_label)
+        system_layout.addLayout(startup_row)
+        system_layout.addSpacing(8)
+        system_layout.addWidget(privacy_label)
+        system_layout.addWidget(vision_card)
+        system_layout.addSpacing(4)
+        tools_label = QLabel("Heko araçları")
+        tools_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        tools_label.setStyleSheet("color:#c9d1d9;")
+        system_layout.addWidget(tools_label)
         utility_row = QHBoxLayout()
         utility_row.setSpacing(8)
         utility_row.addWidget(memory_btn)
         utility_row.addWidget(diagnostics_btn)
-        content.addLayout(utility_row)
-        content.addWidget(organizer_btn)
-        content.addWidget(daily_btn)
-        content.addStretch()
+        organizer_row = QHBoxLayout()
+        organizer_row.setSpacing(8)
+        organizer_row.addWidget(organizer_btn)
+        organizer_row.addWidget(daily_btn)
+        system_layout.addLayout(utility_row)
+        system_layout.addLayout(organizer_row)
+        system_layout.addWidget(local_model_btn)
+        system_layout.addStretch()
+
+        tabs.addTab(assistant_page, "Asistan")
+        tabs.addTab(appearance_page, "Görünüm")
+        tabs.addTab(voice_page, "Ses")
+        tabs.addTab(system_page, "Sistem")
+        content.addWidget(tabs, 1)
         content.addWidget(save_btn)
 
         return content
@@ -344,6 +599,12 @@ class SettingsWindow(QWidget):
         self._daily_settings_window.show()
         self._daily_settings_window.activateWindow()
 
+    def _open_local_model_settings(self):
+        self._local_model_window.move(self.x() - 24, self.y() + 70)
+        self._local_model_window.show()
+        self._local_model_window.raise_()
+        self._local_model_window.activateWindow()
+
     def _update_startup_btn(self):
         if self._startup_enabled:
             self._startup_btn.setText("✅ Açık")
@@ -374,7 +635,77 @@ class SettingsWindow(QWidget):
             btn.is_selected = (btn.user_color == user_color and btn.ai_color == ai_color)
             btn.update()
 
+    def _update_voice_value_labels(self):
+        if hasattr(self, "_rate_value"):
+            self._rate_value.setText(f"{self._rate_slider.value() / 10:+.1f}")
+        if hasattr(self, "_volume_value"):
+            self._volume_value.setText(f"%{self._volume_slider.value()}")
+
+    def _current_voice_settings(self) -> dict:
+        return {
+            "auto_speak": self._tts_auto_checkbox.isChecked(),
+            "voice_id": self._voice_combo.currentData() or "",
+            "rate": self._rate_slider.value() / 10,
+            "volume": self._volume_slider.value() / 100,
+        }
+
+    def _test_voice(self):
+        if not self._speech:
+            return
+        values = self._current_voice_settings()
+        self._speech.configure(**values)
+        ok, message = self._speech.speak(
+            "Merhaba, ben Heko. Sesli yanıt özelliğim hazır."
+        )
+        if not ok:
+            QMessageBox.information(self, "Ses kullanılamıyor", message)
+
     def _save(self):
-        config.SYSTEM_PROMPT = self._prompt_edit.toPlainText().strip()
+        selected_mode = next(
+            (
+                name for name, button in self._mode_buttons.items()
+                if button.isChecked()
+            ),
+            "normal",
+        )
+        assistant_prompt = self._prompt_edit.toPlainText().strip()
+        if not assistant_prompt:
+            assistant_prompt = config.MODES[selected_mode]
+        try:
+            saved_settings = save_app_settings(
+                config.APP_SETTINGS_PATH,
+                screen_vision_enabled=self._screen_vision_checkbox.isChecked(),
+                tts_auto_speak=self._tts_auto_checkbox.isChecked(),
+                tts_voice_id=self._voice_combo.currentData() or "",
+                tts_rate=self._rate_slider.value() / 10,
+                tts_volume=self._volume_slider.value() / 100,
+                assistant_mode=selected_mode,
+                assistant_prompt=assistant_prompt,
+                accent_color=config.ACCENT_COLOR,
+                ai_color=config.AI_COLOR,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Ayar kaydedilemedi",
+                f"Ayar tercihleri kaydedilemedi: {exc}",
+            )
+            return
+        config.SCREEN_VISION_ENABLED = saved_settings["screen_vision_enabled"]
+        config.TTS_AUTO_SPEAK = saved_settings["tts_auto_speak"]
+        config.TTS_VOICE_ID = saved_settings["tts_voice_id"]
+        config.TTS_RATE = saved_settings["tts_rate"]
+        config.TTS_VOLUME = saved_settings["tts_volume"]
+        config.CURRENT_MODE = saved_settings["assistant_mode"]
+        config.SYSTEM_PROMPT = saved_settings["assistant_prompt"]
+        config.ACCENT_COLOR = saved_settings["accent_color"]
+        config.AI_COLOR = saved_settings["ai_color"]
+        if self._speech:
+            self._speech.configure(
+                auto_speak=config.TTS_AUTO_SPEAK,
+                voice_id=config.TTS_VOICE_ID,
+                rate=config.TTS_RATE,
+                volume=config.TTS_VOLUME,
+            )
         self.saved.emit()
         self.hide()

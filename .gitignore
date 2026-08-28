@@ -20,6 +20,9 @@ memory/daily_briefing_config.json
 memory/daily_briefing_state.json
 memory/session_names.json
 memory/shared_workspace.json
+memory/local_model_settings.json
+memory/app_settings.json
 memory/sessions/
 memory/project_backups/
 memory/*.tmp
+evals/reports/

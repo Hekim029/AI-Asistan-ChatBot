@@ -712,6 +712,28 @@ TOOLS.append({
 TOOLS.append({
     "type": "function",
     "function": {
+        "name": "analyze_screen",
+        "description": (
+            "Kullanıcının açık isteği ve ayrı onayı sonrasında ekrandan tek kare "
+            "alıp görsel olarak yorumlar. İlk çağrı yalnızca onay kaydı oluşturur; "
+            "görüntü almaz. 'Ekranıma bak' ve 'ekranımda ne var' isteklerinde kullan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "Kullanıcının ekran hakkında sorduğu kısa soru."
+                }
+            },
+            "required": [],
+        },
+    },
+})
+
+TOOLS.append({
+    "type": "function",
+    "function": {
         "name": "read_document",
         "description": (
             "Kullanıcının açıkça verdiği PDF veya DOCX belgesinden yalnızca "
@@ -850,6 +872,7 @@ class ToolExecutor:
         "forget_user_memory",
         "update_project_file",
         "close_app",
+        "analyze_screen",
     }
 
     def __init__(
@@ -885,6 +908,15 @@ class ToolExecutor:
             return self._confirm_pending_action(args)
         if tool_name == "cancel_pending_action":
             return self._cancel_pending_action(args)
+
+        if tool_name == "analyze_screen":
+            import utils.config as config
+            if not getattr(config, "SCREEN_VISION_ENABLED", False):
+                return (
+                    "Ekran farkındalığı şu anda kapalı. Kullanmak istersen "
+                    "Ayarlar > Sistem bölümündeki deneysel özelliği açıp "
+                    "ayarları kaydetmelisin."
+                )
 
         if tool_name in self.HIGH_RISK_TOOLS:
             return self._request_confirmation(tool_name, args)
@@ -1063,7 +1095,28 @@ class ToolExecutor:
                 f"'{args.get('app_name', '')}' uygulamasını zorla kapatmak. "
                 "Kaydedilmemiş çalışmalar kaybolabilir"
             )
+        if tool_name == "analyze_screen":
+            return (
+                "Ekrandan tek bir görüntü almak ve görsel analiz için Groq'a "
+                "göndermek. Görüntü diske kaydedilmeyecek ve işlemden sonra "
+                "bellekten bırakılacak"
+            )
         return tool_name
+
+    def attach_pending_screen_capture(
+        self, image_data: str, width: int, height: int
+    ) -> None:
+        """UI ana iş parçacığında alınan kareyi yalnızca bekleyen onaya bağlar."""
+        pending = self._pending_action
+        if not pending or pending.get("tool_name") != "analyze_screen":
+            raise ValueError("Bekleyen bir ekran analizi onayı yok.")
+        if self._pending_is_expired(pending):
+            self._pending_action = None
+            raise ValueError("Ekran analizi onay süresi doldu.")
+        from services.screen_vision import validate_screen_image_data
+        pending["args"]["_image_data"] = validate_screen_image_data(image_data)
+        pending["args"]["_image_width"] = max(1, min(int(width), 10_000))
+        pending["args"]["_image_height"] = max(1, min(int(height), 10_000))
 
     def has_pending_action(self) -> bool:
         return self._pending_action is not None
@@ -1594,6 +1647,31 @@ class ToolExecutor:
     def _get_system_status(self, args: dict) -> str:
         from services.system_info import get_system_status
         return get_system_status()
+
+    def _analyze_screen(self, args: dict) -> str:
+        from services.screen_vision import analyze_screen
+        import utils.config as config
+
+        image_data = args.pop("_image_data", "")
+        args.pop("_image_width", None)
+        args.pop("_image_height", None)
+        if not getattr(config, "SCREEN_VISION_ENABLED", False):
+            return (
+                "Ekran farkındalığı kapatıldığı için görüntü analiz servisine "
+                "gönderilmedi."
+            )
+        if not image_data:
+            return (
+                "Ekran görüntüsü alınmadı. Gizliliğin için işlemi sohbet "
+                "kartındaki Onayla düğmesiyle yeniden başlatmalısın."
+            )
+        return analyze_screen(
+            image_data,
+            args.get("question", ""),
+            api_key=config.GROQ_API_KEY or "",
+            api_url=config.API_URL,
+            model=config.VISION_MODEL,
+        )
 
     def _get_shared_activity(self, args: dict) -> str:
         if self.shared_workspace is None:

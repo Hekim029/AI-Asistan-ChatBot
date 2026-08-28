@@ -109,6 +109,13 @@ def detect_local_tool(message: str) -> tuple[str, dict] | None:
         return None
 
     if text in {
+        "ekranıma bak", "ekrana bak", "ekranı incele", "ekranımı incele",
+        "ekranımda ne var", "ekranımda ne görüyorsun",
+        "şu an ekranımda ne var", "ekran görüntüsünü analiz et",
+    }:
+        return "analyze_screen", {"question": str(message or "").strip()[:1000]}
+
+    if text in {
         "günlük özet", "günlük özetimi göster", "günlük özetimi ver",
         "bugünün özeti", "bugünkü özetimi ver",
     }:

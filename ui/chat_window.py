@@ -1,8 +1,11 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QTextEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication, QMenu
+    QLineEdit, QTextEdit, QPushButton, QScrollArea, QLabel, QFrame, QApplication,
+    QMenu, QToolTip,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QRectF, QThread
+from PySide6.QtCore import (
+    Qt, QTimer, Signal, QRectF, QThread, QBuffer, QByteArray, QIODevice,
+)
 from PySide6.QtGui import (
     QFont, QPainter, QColor, QPixmap, QPainterPath, QRadialGradient,
     QLinearGradient, QPen
@@ -15,9 +18,11 @@ from ui.history_window import HistoryWindow
 from ui.project_diff_window import ProjectDiffWindow
 from core.daily_motivation import get_today_motivation
 from services.daily_briefing import DailyBriefingService
+from services.speech_output import SpeechOutputManager
 from datetime import datetime, timezone, timedelta
 import math
 import os
+import base64
 
 
 class DailyBriefingWorker(QThread):
@@ -53,6 +58,11 @@ def response_for_display(response: str, pending_info: dict | None = None) -> str
             return (
                 "Dosyayı Çöp Kutusu'na taşıma işlemi hazırlandı. "
                 "Aşağıdaki işlem kartından onaylayabilir veya iptal edebilirsin."
+            )
+        if tool_name == "analyze_screen":
+            return (
+                "Ekranını inceleme isteği hazır. Görüntü henüz alınmadı. "
+                "Aşağıdaki karttan onay verirsen tek kare alınarak analiz edilecek."
             )
         return (
             "İşlem hazırlandı. Ayrıntıları aşağıdaki güvenlik kartından "
@@ -188,7 +198,13 @@ class ChatWindow(QMainWindow):
     new_window_requested = Signal()
     sessions_requested = Signal()
 
-    def __init__(self, shared_state=None, session_id="main", display_name="Sohbet 1"):
+    def __init__(
+        self,
+        shared_state=None,
+        session_id="main",
+        display_name="Sohbet 1",
+        speech_manager=None,
+    ):
         super().__init__()
         self.session_id = session_id
         self.display_name = display_name
@@ -196,12 +212,20 @@ class ChatWindow(QMainWindow):
         self._daily_briefing = DailyBriefingService(
             self.router.tasks, self.router.reminders
         )
+        self._speech = speech_manager or SpeechOutputManager(
+            auto_speak=getattr(config, "TTS_AUTO_SPEAK", False),
+            voice_id=getattr(config, "TTS_VOICE_ID", ""),
+            rate=getattr(config, "TTS_RATE", 0.0),
+            volume=getattr(config, "TTS_VOLUME", 0.85),
+        )
         self._settings = SettingsWindow(
             self.router.user_memory,
             self.router.tasks,
             self.router.reminders,
             self._daily_briefing,
             self.router.workspace,
+            self.router.llm,
+            self._speech,
         )
         self._drag_pos = None
         self._typing_dots = 0
@@ -224,12 +248,18 @@ class ChatWindow(QMainWindow):
         self._typing_wrapper = None
         self._worker = None
         self._worker_had_pending_action = False
+        self._screen_capture_in_progress = False
         self._is_online = True
         self._message_count = 0
         self._is_expanded = False
         self._normal_geometry = None
         self._on_response_callback = None
         self._on_status_callback = None
+        self._on_error_callback = None
+        self._on_presence_callback = None
+        self._on_activity_callback = None
+        self._active_speech_button = None
+        self._speech.state_changed.connect(self._on_speech_state_changed)
         self._mic_worker = None
         self._history = HistoryWindow(self.router.context)
         self._briefing_worker = None
@@ -715,9 +745,13 @@ class ChatWindow(QMainWindow):
             if motivation:
                 msg += f"\n\n{motivation}"
             self._add_message(msg, is_user=False)
+            if self._on_presence_callback:
+                self._on_presence_callback("idle")
         else:
             self._status_btn.setText("● offline")
             self._add_message("Uyuyorum... Uyandırmak için online yap. 💤", is_user=False)
+            if self._on_presence_callback:
+                self._on_presence_callback("sleeping")
 
     def _toggle_search(self):
         is_active = self._search_btn.isChecked()
@@ -800,7 +834,28 @@ class ChatWindow(QMainWindow):
                     border-bottom-left-radius: 3px;
                 }}
             """)
-            card_layout.addWidget(time_label, 0, Qt.AlignLeft)
+            footer = QHBoxLayout()
+            footer.setContentsMargins(0, 0, 0, 0)
+            footer.setSpacing(5)
+            speech_btn = QPushButton("🔊")
+            speech_btn.setProperty("speech_button", True)
+            speech_btn.setFixedSize(24, 20)
+            speech_btn.setToolTip("Bu yanıtı seslendir")
+            speech_btn.setStyleSheet("""
+                QPushButton {
+                    background:transparent;color:#8b949e;border:none;
+                    border-radius:6px;font-size:11px;
+                }
+                QPushButton:hover { background:#30363d;color:#ffffff; }
+            """)
+            speech_btn.clicked.connect(
+                lambda _checked=False, value=text, button=speech_btn:
+                self._speak_message(value, button)
+            )
+            footer.addWidget(time_label)
+            footer.addStretch()
+            footer.addWidget(speech_btn)
+            card_layout.addLayout(footer)
             outer.addWidget(card)
             outer.addStretch()
 
@@ -817,6 +872,29 @@ class ChatWindow(QMainWindow):
         QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
             self._scroll.verticalScrollBar().maximum()
         ))
+        if not is_user and self._speech.auto_speak:
+            QTimer.singleShot(0, lambda value=text: self._speech.speak(value))
+
+    def _speak_message(self, text: str, button: QPushButton):
+        if self._active_speech_button and self._active_speech_button is not button:
+            self._active_speech_button.setText("🔊")
+            self._active_speech_button.setToolTip("Bu yanıtı seslendir")
+        self._active_speech_button = button
+        ok, message = self._speech.toggle(text)
+        if not ok:
+            button.setText("🔊")
+            self._active_speech_button = None
+            QToolTip.showText(button.mapToGlobal(button.rect().bottomLeft()), message, button)
+            return
+        if self._speech.is_speaking:
+            button.setText("■")
+            button.setToolTip("Seslendirmeyi durdur")
+
+    def _on_speech_state_changed(self, state: str):
+        if state in {"ready", "error"} and self._active_speech_button:
+            self._active_speech_button.setText("🔊")
+            self._active_speech_button.setToolTip("Bu yanıtı seslendir")
+            self._active_speech_button = None
 
     def _show_message_menu(self, pos, text: str, widget: QWidget):
         menu = QMenu()
@@ -872,6 +950,8 @@ class ChatWindow(QMainWindow):
             self._typing_label = None
 
     def _send_message(self):
+        if self._screen_capture_in_progress:
+            return
         if self._worker and self._worker.isRunning():
             return
         text = self.input_field.text().strip()
@@ -883,8 +963,24 @@ class ChatWindow(QMainWindow):
             self.input_field.clear()
             return
 
+        pending_info = self.router.executor.pending_action_info()
+        normalized = " ".join(text.casefold().split())
+        if (
+            pending_info
+            and pending_info.get("tool_name") == "analyze_screen"
+            and normalized in {
+                "onaylıyorum", "onayla", "evet", "evet yap",
+                "tamam yap", "işlemi yap",
+            }
+        ):
+            self._begin_screen_capture(text)
+            return
+
         self._add_message(text, is_user=True)
         self.input_field.clear()
+        self._start_response_worker(text)
+
+    def _start_response_worker(self, text: str):
         self.input_field.setEnabled(False)
         self._show_typing_indicator()
 
@@ -898,7 +994,79 @@ class ChatWindow(QMainWindow):
         self._begin_operation("İstek hazırlanıyor...")
         worker.start()
 
+    def _begin_screen_capture(self, approval_text: str):
+        """Onaydan sonra sohbeti gizleyip tek kareyi UI iş parçacığında alır."""
+        if not getattr(config, "SCREEN_VISION_ENABLED", False):
+            self.router.executor.execute("cancel_pending_action", {})
+            self._add_message(
+                "Ekran farkındalığı Ayarlar > Sistem bölümünden kapatılmış; "
+                "bu nedenle görüntü alınmadı.",
+                is_user=False,
+            )
+            return
+        self._screen_capture_in_progress = True
+        self._approval_timer.stop()
+        for button in self._approval_buttons:
+            button.setEnabled(False)
+        self._add_message(approval_text, is_user=True)
+        self.input_field.clear()
+        self.input_field.setEnabled(False)
+        self._begin_operation("Ekran görüntüsü hazırlanıyor...")
+        screen = QApplication.screenAt(self.frameGeometry().center())
+        screen = screen or QApplication.primaryScreen()
+        self.hide()
+        QTimer.singleShot(
+            180, lambda: self._capture_screen_and_continue(screen, approval_text)
+        )
+
+    def _capture_screen_and_continue(self, screen, approval_text: str):
+        try:
+            if screen is None:
+                raise RuntimeError("Kullanılabilir ekran bulunamadı.")
+            pixmap = screen.grabWindow(0)
+            if pixmap.isNull():
+                raise RuntimeError("Ekran görüntüsü alınamadı.")
+            image = pixmap.toImage()
+            if image.width() > 1600 or image.height() > 1200:
+                image = image.scaled(
+                    1600, 1200, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+            encoded = QByteArray()
+            buffer = QBuffer(encoded)
+            if not buffer.open(QIODevice.WriteOnly):
+                raise RuntimeError("Görüntü belleğe hazırlanamadı.")
+            if not image.save(buffer, "JPEG", 72):
+                raise RuntimeError("Ekran görüntüsü sıkıştırılamadı.")
+            buffer.close()
+            image_data = "data:image/jpeg;base64," + base64.b64encode(
+                bytes(encoded)
+            ).decode("ascii")
+            self.router.executor.attach_pending_screen_capture(
+                image_data, image.width(), image.height()
+            )
+        except Exception as exc:
+            from services.security import safe_error
+            self.router.executor.execute("cancel_pending_action", {})
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self._screen_capture_in_progress = False
+            self.input_field.setEnabled(True)
+            self._finish_operation()
+            self._add_message(
+                f"Ekran görüntüsü alınamadı: {safe_error(exc)}", is_user=False
+            )
+            return
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._screen_capture_in_progress = False
+        self._start_response_worker(approval_text)
+
     def _handle_send_button(self):
+        if self._screen_capture_in_progress:
+            return
         if self._worker and self._worker.isRunning():
             self._cancel_current_response()
             return
@@ -964,18 +1132,24 @@ class ChatWindow(QMainWindow):
         self._worker = None
 
     def _begin_operation(self, status: str):
+        was_active = self._operation_timer.isActive()
         self._operation_elapsed = 0
         self._operation_status_text = status
         self._operation_label.setVisible(True)
         self._operation_timer.start()
         self._style_send_button(running=True)
         self._refresh_operation_label()
+        if not was_active and self._on_activity_callback:
+            self._on_activity_callback(True)
 
     def _finish_operation(self):
+        was_active = self._operation_timer.isActive()
         self._operation_timer.stop()
         self._operation_label.setVisible(False)
         self._send_btn.setEnabled(True)
         self._style_send_button(running=False)
+        if was_active and self._on_activity_callback:
+            self._on_activity_callback(False)
 
     def _tick_operation(self):
         self._operation_elapsed += 1
@@ -1026,7 +1200,11 @@ class ChatWindow(QMainWindow):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        title = QLabel("İşlem onayı")
+        title = QLabel(
+            "Ekran paylaşımı onayı"
+            if info.get("tool_name") == "analyze_screen"
+            else "İşlem onayı"
+        )
         title.setFont(QFont("Segoe UI", 10, QFont.Bold))
         title.setStyleSheet("color:#e6edf3;border:none;")
         summary = QLabel(info["summary"])
@@ -1167,6 +1345,8 @@ class ChatWindow(QMainWindow):
         self._add_message(f"⚠️ {error}", is_user=False)
         self.input_field.setEnabled(True)
         self._finish_operation()
+        if self._on_error_callback:
+            self._on_error_callback(error)
 
     def _on_selection_changed(self, label: QLabel):
         selected = label.selectedText()
@@ -1271,12 +1451,15 @@ class ChatWindow(QMainWindow):
         self._history.show()
 
     def _start_mic(self):
+        self._speech.stop()
         self._mic_btn.setText("⏹")
         self.input_field.setPlaceholderText("Dinleniyor...")
         from core.worker import MicWorker
         self._mic_worker = MicWorker()
         self._mic_worker.text_ready.connect(self._on_mic_result)
         self._mic_worker.start()
+        if self._on_presence_callback:
+            self._on_presence_callback("listening")
 
     def _stop_mic(self):
         self._mic_btn.setText("🎤")
@@ -1287,9 +1470,13 @@ class ChatWindow(QMainWindow):
         self._mic_btn.setText("🎤")
         self.input_field.setPlaceholderText("Mesaj yaz...")
         if text:
+            if self._on_presence_callback:
+                self._on_presence_callback("idle")
             self.input_field.setText(text)
             self._send_message()
         else:
+            if self._on_presence_callback:
+                self._on_presence_callback("alert")
             self._add_message("🎤 Ses anlaşılamadı, tekrar dene.", is_user=False)
 
     def _toggle_mic(self):
@@ -1311,12 +1498,12 @@ class MapBackgroundWidget(QWidget):
     def __init__(self):
         super().__init__()
         portrait_path = os.path.join(
-            config.BASE_DIR,
+            config.RESOURCE_DIR,
             "assets",
             "chaos_observatory_background.png",
         )
         landscape_path = os.path.join(
-            config.BASE_DIR,
+            config.RESOURCE_DIR,
             "assets",
             "chaos_observatory_background_wide.png",
         )

@@ -2,24 +2,48 @@ import os
 import sys
 from dotenv import load_dotenv
 
-if getattr(sys, 'frozen', False):
+from utils.runtime_storage import prepare_runtime_data_dir
+
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+if IS_FROZEN:
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RESOURCE_DIR = getattr(sys, "_MEIPASS", BASE_DIR)
 
 # Çalışma dizinindeki saldırgan kontrollü bir .env yerine yalnızca uygulamanın
 # kendi kökündeki yapılandırmayı yükle.
 load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 
-MEMORY_DIR = os.path.join(BASE_DIR, "memory")
+MEMORY_DIR = str(prepare_runtime_data_dir(BASE_DIR, frozen=IS_FROZEN))
+APP_SETTINGS_PATH = os.path.join(MEMORY_DIR, "app_settings.json")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # İsteğe bağlı yerel sohbet modeli. Örnek: OLLAMA_MODEL=qwen3:8b
 # Boş bırakılırsa yalnızca mevcut Groq + yerel komut katmanı kullanılır.
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").strip()
+OLLAMA_SETTINGS_PATH = os.path.join(MEMORY_DIR, "local_model_settings.json")
+
+# Arayüzden kaydedilen tercih varsa .env değerinin önüne geçer. Dosya yoksa
+# mevcut .env davranışı aynen korunur.
+from services.local_model import load_local_model_settings  # noqa: E402
+from services.app_settings import load_app_settings  # noqa: E402
+
+_LOCAL_MODEL_SETTINGS = load_local_model_settings(
+    OLLAMA_SETTINGS_PATH,
+    default_model=os.getenv("OLLAMA_MODEL", "").strip(),
+    default_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").strip(),
+)
+OLLAMA_MODEL = _LOCAL_MODEL_SETTINGS["model"]
+OLLAMA_URL = _LOCAL_MODEL_SETTINGS["base_url"]
+_APP_SETTINGS = load_app_settings(APP_SETTINGS_PATH)
+SCREEN_VISION_ENABLED = _APP_SETTINGS["screen_vision_enabled"]
+TTS_AUTO_SPEAK = _APP_SETTINGS["tts_auto_speak"]
+TTS_VOICE_ID = _APP_SETTINGS["tts_voice_id"]
+TTS_RATE = _APP_SETTINGS["tts_rate"]
+TTS_VOLUME = _APP_SETTINGS["tts_volume"]
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b").strip()
 HEKO_PROJECT_ROOT = os.getenv("HEKO_PROJECT_ROOT", BASE_DIR).strip()
 
 # YouTube Data API v3 — arama sonucundan direkt video açmak için kullanılır.
@@ -100,8 +124,7 @@ Kullanıcının teknik seviyesini geçmiş konuşmalardan çıkarsamaya çalış
 Türkçe sorulara Türkçe, İngilizce sorulara İngilizce cevap verirsin.""",
 }
 
-ACCENT_COLOR = "#4a9eff"
-AI_COLOR = "#1e242c"
-
-SYSTEM_PROMPT = MODES["normal"]
-CURRENT_MODE = "normal"
+CURRENT_MODE = _APP_SETTINGS["assistant_mode"]
+SYSTEM_PROMPT = _APP_SETTINGS["assistant_prompt"].strip() or MODES[CURRENT_MODE]
+ACCENT_COLOR = _APP_SETTINGS["accent_color"]
+AI_COLOR = _APP_SETTINGS["ai_color"]

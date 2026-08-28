@@ -1,8 +1,10 @@
 import os
 import base64
+import json
 import tempfile
 import time
 import unittest
+import wave
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,7 +19,19 @@ from core.router import Router
 from core.local_intents import clarification_for, detect_local_tool, pending_slot_for
 from services.shared_workspace import SharedWorkspace
 from services.file_reader import read_text_file
-from services.local_model import LocalModelClient
+from services.local_model import (
+    LocalModelClient,
+    load_local_model_settings,
+    probe_ollama,
+    save_local_model_settings,
+)
+from services.app_settings import load_app_settings, save_app_settings
+from utils.runtime_storage import migrate_legacy_data, runtime_data_dir
+from services.screen_vision import (
+    analyze_screen, format_screen_analysis, validate_screen_image_data,
+)
+from services.speech_output import SpeechOutputManager, prepare_spoken_text
+from services.speech_listener import _write_pcm16_wav
 from services.project_workspace import ProjectWorkspace
 from services.session_registry import SessionRegistry
 from memory.user_memory import UserMemory
@@ -30,6 +44,10 @@ from services.weather_service import describe_weather_code, get_weather
 from services.gmail_reader import _decode_message_part
 from ui.project_diff_window import diff_line_kind, diff_stats
 from ui.chat_window import response_for_display
+from ui.pet_state import normalize_pet_state, pet_sprite_frame, resting_state
+from evals.evaluator import (
+    load_suite, run_live_local_suite, run_offline_suite, summarize_results,
+)
 from services.document_reader import read_document, _validate_docx_archive
 from services.calendar_reader import _validated_datetime
 from services.security import (
@@ -186,6 +204,16 @@ class ReminderManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.add("Geçmiş", past.isoformat())
 
+    def test_reminder_can_be_updated_and_deleted_manually(self):
+        due = datetime.now().astimezone() + timedelta(hours=1)
+        item = self.manager.add("Eski metin", due.isoformat())
+        new_due = due + timedelta(hours=1)
+        updated = self.manager.update(item["id"], "Yeni metin", new_due.isoformat())
+        self.assertEqual("Yeni metin", updated["text"])
+        self.assertEqual(item["id"], self.manager.pending()[0]["id"])
+        self.assertEqual(item["id"], self.manager.delete(item["id"])["id"])
+        self.assertEqual([], self.manager.pending())
+
 
 class TaskManagerTests(unittest.TestCase):
     def setUp(self):
@@ -238,6 +266,34 @@ class TaskManagerTests(unittest.TestCase):
         self.assertEqual(1, len(results))
         self.assertFalse(results[0].get("_suggestion", False))
         self.assertIn("proje", results[0]["tags"])
+
+    def test_task_can_be_updated_and_deleted_manually(self):
+        item = self.manager.add_task("Eski görev")
+        updated = self.manager.update_task(item["id"], "Yeni görev")
+        self.assertEqual("Yeni görev", updated["title"])
+        self.assertEqual("Yeni görev", self.manager.pending_tasks()[0]["title"])
+        self.assertEqual(item["id"], self.manager.delete_task(item["id"])["id"])
+        self.assertEqual([], self.manager.pending_tasks())
+
+    def test_note_can_be_updated_and_deleted_manually(self):
+        item = self.manager.add_note("Eski not")
+        updated = self.manager.update_note(item["id"], "Arayüz mavi olacak", ["renk"])
+        self.assertEqual("Arayüz mavi olacak", updated["text"])
+        self.assertIn("renk", updated["tags"])
+        self.assertEqual(item["id"], self.manager.delete_note(item["id"])["id"])
+        self.assertEqual([], self.manager.notes())
+
+    def test_manual_control_center_data_is_visible_to_heko_tools(self):
+        self.manager.add_task("Kontrol merkezinden eklenen görev")
+        self.manager.add_note("Kontrol merkezinden eklenen not", ["manuel"])
+        executor = ToolExecutor(
+            DummyMemory(), DummyContext(), task_manager=self.manager
+        )
+        self.assertIn("Kontrol merkezinden eklenen görev", executor.execute("list_tasks", {}))
+        self.assertIn(
+            "Kontrol merkezinden eklenen not",
+            executor.execute("list_notes", {"query": "manuel"}),
+        )
 
 
 class DailyBriefingTests(unittest.TestCase):
@@ -325,6 +381,12 @@ class LocalIntentTests(unittest.TestCase):
             detect_local_tool("Alışveriş görevini tamamla"),
         )
 
+    def test_screen_request_uses_explicit_screen_analysis_tool(self):
+        self.assertEqual(
+            ("analyze_screen", {"question": "ekranımda ne var"}),
+            detect_local_tool("ekranımda ne var"),
+        )
+
     def test_city_weather_is_parsed_locally(self):
         self.assertEqual(
             ("get_weather", {"city": "Ankara", "period": "today"}),
@@ -349,6 +411,20 @@ class SharedWorkspaceTests(unittest.TestCase):
             self.assertEqual(1, len(visible))
             self.assertEqual("chat-1", visible[0]["session_id"])
             self.assertIn("app.py", workspace.formatted_context("chat-2"))
+
+    def test_manual_activity_can_be_updated_deleted_and_used_as_context(self):
+        with tempfile.TemporaryDirectory() as folder:
+            workspace = SharedWorkspace(os.path.join(folder, "shared.json"))
+            item = workspace.publish(
+                "manual", "manual", "Araştırma", "İlk çalışma özeti"
+            )
+            updated = workspace.update_event(
+                item["id"], "Python araştırması", "Asyncio tercih edilecek"
+            )
+            self.assertEqual("Python araştırması", updated["title"])
+            self.assertIn("Asyncio", workspace.formatted_context("chat-1"))
+            self.assertEqual(item["id"], workspace.delete_event(item["id"])["id"])
+            self.assertEqual([], workspace.recent())
 
 
 class FileReaderTests(unittest.TestCase):
@@ -385,6 +461,323 @@ class LocalModelTests(unittest.TestCase):
         client = LocalModelClient("")
         self.assertFalse(client.enabled)
         self.assertIsNone(client.chat([]))
+
+    def test_local_model_settings_round_trip(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "local-model.json"
+            save_local_model_settings(path, "qwen3:8b", "http://localhost:11434/")
+            settings = load_local_model_settings(path)
+            self.assertEqual("qwen3:8b", settings["model"])
+            self.assertEqual("http://localhost:11434", settings["base_url"])
+
+    def test_local_model_settings_reject_remote_host(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "local-model.json"
+            with self.assertRaises(ValueError):
+                save_local_model_settings(path, "qwen3:8b", "http://example.com:11434")
+
+    @patch("services.local_model.requests.Session.get")
+    def test_probe_lists_installed_models(self, get):
+        response = get.return_value
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"models": [{"name": "qwen3:8b"}]}
+        result = probe_ollama("qwen3:8b", "http://127.0.0.1:11434")
+        self.assertTrue(result["ok"])
+        self.assertEqual(["qwen3:8b"], result["models"])
+
+    @patch("services.local_model.requests.Session.get")
+    def test_probe_reports_missing_selected_model(self, get):
+        response = get.return_value
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"models": [{"name": "other:latest"}]}
+        result = probe_ollama("qwen3:8b", "http://127.0.0.1:11434")
+        self.assertFalse(result["ok"])
+        self.assertIn("yüklü değil", result["message"])
+
+
+class ScreenVisionTests(unittest.TestCase):
+    @staticmethod
+    def _jpeg_data_uri():
+        return "data:image/jpeg;base64," + base64.b64encode(
+            b"\xff\xd8fake-jpeg"
+        ).decode("ascii")
+
+    def test_screen_image_validation_rejects_non_image_data(self):
+        with self.assertRaises(ValueError):
+            validate_screen_image_data("data:text/plain;base64,SGVrbw==")
+
+    @patch("services.screen_vision.requests.Session.post")
+    def test_screen_image_is_sent_only_as_in_memory_vision_input(self, post):
+        response = post.return_value
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "choices": [{"message": {"content": json.dumps({
+                "summary": "Bir kod editörü açık.",
+                "details": ["Terminal paneli görünüyor."],
+                "warning": "",
+            }, ensure_ascii=False)}}]
+        }
+        result = analyze_screen(
+            self._jpeg_data_uri(),
+            "Ekranda ne var?",
+            api_key="test-key",
+            api_url="https://api.groq.com/openai/v1/chat/completions",
+            model="qwen/qwen3.6-27b",
+        )
+        self.assertIn("kod editörü", result)
+        payload = post.call_args.kwargs["json"]
+        image_url = payload["messages"][0]["content"][1]["image_url"]["url"]
+        self.assertTrue(image_url.startswith("data:image/jpeg;base64,"))
+        self.assertNotIn("response_format", payload)
+
+    @patch("services.screen_vision.requests.Session.post")
+    def test_bad_request_is_explained_without_raw_http_details(self, post):
+        post.return_value.status_code = 400
+        result = analyze_screen(
+            self._jpeg_data_uri(),
+            "Ekranda ne var?",
+            api_key="test-key",
+            api_url="https://api.groq.com/openai/v1/chat/completions",
+            model="qwen/qwen3.6-27b",
+        )
+        self.assertIn("isteği kabul etmedi", result)
+        self.assertNotIn("https://", result)
+
+    def test_structured_screen_result_is_short_and_readable(self):
+        result = format_screen_analysis(json.dumps({
+            "summary": "Visual Studio Code açık.",
+            "details": ["Python projesi görüntüleniyor.", "Terminal açık."],
+            "warning": "",
+        }, ensure_ascii=False))
+        self.assertTrue(result.startswith("Ekran özeti:"))
+        self.assertIn("- Python projesi", result)
+        self.assertNotIn("```", result)
+
+    def test_raw_terminal_ocr_never_becomes_markdown_code_dump(self):
+        raw = "```text\n    powershell\n    (venv) PS C:\\Users\\test\n○\n○\n```"
+        result = format_screen_analysis(raw)
+        self.assertIn("terminal", result.casefold())
+        self.assertNotIn("```", result)
+        self.assertNotIn("C:\\Users\\test", result)
+
+    def test_screen_tool_waits_for_explicit_approval_and_capture(self):
+        executor = ToolExecutor(DummyMemory(), DummyContext())
+        with patch("utils.config.SCREEN_VISION_ENABLED", True):
+            pending = executor.execute(
+                "analyze_screen", {"question": "Ekranda ne var?"}
+            )
+            self.assertIn("ONAY_GEREKLİ", pending)
+            self.assertEqual(
+                "analyze_screen", executor.pending_action_info()["tool_name"]
+            )
+            executor.attach_pending_screen_capture(self._jpeg_data_uri(), 1280, 720)
+            with patch(
+                "services.screen_vision.analyze_screen",
+                return_value="Onaylı ekran açıklaması",
+            ) as vision:
+                result = executor.execute("confirm_pending_action", {})
+        self.assertEqual("Onaylı ekran açıklaması", result)
+        vision.assert_called_once()
+        self.assertFalse(executor.has_pending_action())
+
+    def test_disabled_screen_tool_never_creates_pending_capture(self):
+        executor = ToolExecutor(DummyMemory(), DummyContext())
+        with patch("utils.config.SCREEN_VISION_ENABLED", False):
+            result = executor.execute(
+                "analyze_screen", {"question": "Ekranda ne var?"}
+            )
+        self.assertIn("kapalı", result)
+        self.assertFalse(executor.has_pending_action())
+
+
+class AppSettingsTests(unittest.TestCase):
+    def test_screen_vision_is_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = load_app_settings(Path(directory) / "app_settings.json")
+        self.assertFalse(settings["screen_vision_enabled"])
+
+    def test_app_settings_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app_settings.json"
+            save_app_settings(
+                path,
+                screen_vision_enabled=True,
+                tts_auto_speak=True,
+                tts_voice_id="tr_TR|Heko Voice|Female|Adult",
+                tts_rate=0.2,
+                tts_volume=0.7,
+                assistant_mode="teknik",
+                assistant_prompt="Kısa, anlaşılır ve teknik cevaplar ver.",
+                accent_color="#9B59B6",
+                ai_color="#2D1B4E",
+            )
+            settings = load_app_settings(path)
+        self.assertTrue(settings["screen_vision_enabled"])
+        self.assertTrue(settings["tts_auto_speak"])
+        self.assertEqual("tr_TR|Heko Voice|Female|Adult", settings["tts_voice_id"])
+        self.assertEqual(0.2, settings["tts_rate"])
+        self.assertEqual(0.7, settings["tts_volume"])
+        self.assertEqual("teknik", settings["assistant_mode"])
+        self.assertEqual(
+            "Kısa, anlaşılır ve teknik cevaplar ver.",
+            settings["assistant_prompt"],
+        )
+        self.assertEqual("#9b59b6", settings["accent_color"])
+        self.assertEqual("#2d1b4e", settings["ai_color"])
+
+    def test_app_settings_reject_invalid_personality_and_colors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app_settings.json"
+            with self.assertRaises(ValueError):
+                save_app_settings(path, assistant_mode="saldırgan")
+            with self.assertRaises(ValueError):
+                save_app_settings(path, assistant_prompt="   ")
+            with self.assertRaises(ValueError):
+                save_app_settings(path, accent_color="red")
+
+
+class RuntimeStorageTests(unittest.TestCase):
+    def test_source_run_keeps_repository_memory_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                Path(directory).resolve() / "memory",
+                runtime_data_dir(directory, frozen=False),
+            )
+
+    def test_packaged_run_uses_local_app_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local_data = Path(directory) / "Local"
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local_data)}):
+                selected = runtime_data_dir(Path(directory) / "app", frozen=True)
+        self.assertEqual(local_data.resolve() / "HekoAI" / "data", selected)
+
+    def test_legacy_migration_copies_only_known_runtime_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "memory"
+            target = root / "target"
+            (legacy / "sessions").mkdir(parents=True)
+            (legacy / "history.json").write_text('{"ok": true}', encoding="utf-8")
+            (legacy / "sessions" / "chat-1.json").write_text("[]", encoding="utf-8")
+            (legacy / "injected.py").write_text("raise SystemExit", encoding="utf-8")
+
+            copied = migrate_legacy_data(legacy, target)
+
+            self.assertEqual(2, copied)
+            self.assertTrue((target / "history.json").is_file())
+            self.assertTrue((target / "sessions" / "chat-1.json").is_file())
+            self.assertFalse((target / "injected.py").exists())
+
+
+class PetStateTests(unittest.TestCase):
+    def test_pet_state_normalization_and_sprite_frames(self):
+        self.assertEqual("idle", normalize_pet_state("unknown"))
+        self.assertEqual(2, pet_sprite_frame("busy"))
+        self.assertEqual(3, pet_sprite_frame("alert"))
+        self.assertEqual(1, pet_sprite_frame("sleeping"))
+        self.assertEqual(1, pet_sprite_frame("idle", blinking=True))
+        self.assertEqual(0, pet_sprite_frame("success"))
+        self.assertEqual(0, pet_sprite_frame("speaking"))
+
+    def test_pet_returns_to_busy_when_another_window_is_working(self):
+        self.assertEqual("busy", resting_state(True))
+        self.assertEqual("idle", resting_state(False))
+
+
+class SpeechOutputTests(unittest.TestCase):
+    def test_spoken_text_removes_code_urls_and_protocol_details(self):
+        prepared = prepare_spoken_text(
+            "ONAY_GEREKLİ: iç ayrıntı\n"
+            "Sonuç:** hazır ** https://example.com confirm_pending_action\n"
+            "GROQ_API_KEY=gsk_abcdefghijklmnopqrstuvwxyz123456\n"
+            "```python\nprint('gizli kod')\n```"
+        )
+        self.assertIn("Sonuç", prepared)
+        self.assertIn("Kod bloğunu", prepared)
+        self.assertNotIn("ONAY_GEREKLİ", prepared)
+        self.assertNotIn("https://", prepared)
+        self.assertNotIn("confirm_pending_action", prepared)
+        self.assertNotIn("gsk_", prepared)
+        self.assertNotIn("print(", prepared)
+
+    def test_spoken_text_caps_long_answers_with_screen_handoff(self):
+        prepared = prepare_spoken_text("Uzun açıklama. " * 200)
+        self.assertLessEqual(len(prepared), 930)
+        self.assertTrue(prepared.endswith("Yanıtın devamı ekranda."))
+
+    def test_qt_mock_engine_exercises_shared_speech_manager(self):
+        from PySide6.QtCore import QCoreApplication
+        app = QCoreApplication.instance() or QCoreApplication([])
+        manager = SpeechOutputManager(engine_names=("mock",))
+        self.assertTrue(manager.status()["available"])
+        ok, message = manager.speak("Merhaba Heko")
+        self.assertTrue(ok, message)
+        manager.stop()
+        self.assertIsNotNone(app)
+
+
+class SpeechListenerTests(unittest.TestCase):
+    def test_pcm16_recording_is_written_as_standard_wav(self):
+        class FakeDType:
+            name = "int16"
+
+        class FakeAudio:
+            dtype = FakeDType()
+            shape = (160, 1)
+
+            @staticmethod
+            def tobytes():
+                return b"\x00\x00" * 160
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.wav"
+            _write_pcm16_wav(str(path), FakeAudio(), 16_000)
+            with wave.open(str(path), "rb") as wav_file:
+                self.assertEqual(1, wav_file.getnchannels())
+                self.assertEqual(2, wav_file.getsampwidth())
+                self.assertEqual(16_000, wav_file.getframerate())
+                self.assertEqual(160, wav_file.getnframes())
+
+
+class EvaluationSuiteTests(unittest.TestCase):
+    def test_scenario_ids_are_unique_and_suite_is_bounded(self):
+        scenarios = load_suite()
+        ids = [item["id"] for item in scenarios]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertLessEqual(len(scenarios), 200)
+
+    def test_offline_quality_baseline_has_no_failures(self):
+        summary = summarize_results(run_offline_suite())
+        self.assertGreaterEqual(summary["measured"], 35)
+        self.assertEqual(0, summary["failed"])
+        self.assertEqual(100.0, summary["score"])
+
+    @patch("evals.evaluator.LocalModelClient.chat")
+    def test_live_local_personality_cases_can_be_scored(self, chat):
+        def answer(messages):
+            prompt = messages[-1]["content"]
+            if "moralim" in prompt:
+                return "Seni anlıyorum; bugün zor geçmiş olabilir. İstersen biraz konuşabiliriz."
+            if "liste ile tuple" in prompt:
+                return (
+                    "Liste değiştirilebilir bir koleksiyondur; eleman ekleyebilir veya "
+                    "çıkarabilirsin. Tuple ise genellikle oluşturulduktan sonra "
+                    "değiştirilemeyen, sabit bir veri grubunu temsil eder."
+                )
+            if "çalışmak" in prompt:
+                return (
+                    "Pazartesi temelleri tekrar et. Salı küçük alıştırmalar çöz. "
+                    "Çarşamba bir mini proje başlat. Perşembe hataları düzelt ve "
+                    "Cuma öğrendiklerini kısa bir notla özetle."
+                )
+            return "Kahve molası zamanı; fincanı kap, enerjiyi aç ve hadi devam! ☕"
+
+        chat.side_effect = answer
+        with patch("utils.config.OLLAMA_MODEL", "qwen3:8b"):
+            summary = summarize_results(run_live_local_suite())
+        self.assertEqual(4, summary["passed"])
+        self.assertEqual(0, summary["failed"])
 
 
 class PayloadCompactionTests(unittest.TestCase):
@@ -1007,6 +1400,14 @@ class FriendlyResponseTests(unittest.TestCase):
         self.assertNotIn("abcdef123456", display)
         self.assertIn("services/deneme.py", display)
         self.assertIn("print('Merhaba')", display)
+
+    def test_screen_approval_explains_that_capture_has_not_happened_yet(self):
+        display = response_for_display(
+            "ONAY_GEREKLİ: teknik protokol",
+            {"tool_name": "analyze_screen"},
+        )
+        self.assertIn("henüz alınmadı", display)
+        self.assertNotIn("ONAY_GEREKLİ", display)
 
 
 class DocumentReaderTests(unittest.TestCase):

@@ -1,5 +1,7 @@
 # Heko — AI Desktop Assistant
 
+Güncel geliştirme sürümü: **0.1.0**
+
 Heko; Windows üzerinde çalışan, Türkçe doğal dil desteğine sahip, kişisel hafıza
 ve masaüstü araçları sunan PySide6 tabanlı bir yapay zekâ asistanıdır.
 
@@ -25,7 +27,8 @@ takvim değişiklikleri gibi riskli işlemler kullanıcı onayı olmadan uygulan
 - Diğer pencerelerin sonuçlarını paylaşan kalıcı ortak çalışma alanı
 - Sohbet oturumlarını açma, gizleme ve yeniden adlandırma paneli
 - Kapatılan bir sohbeti aynı geçmiş ve isimle yeniden açma
-- Kontrol Merkezi içinde paylaşılan çalışmalar görünümü
+- Kontrol Merkezi'nden görev, not, hatırlatıcı ve ortak çalışmaları elle
+  ekleme, düzenleme ve silme
 
 ### Kişisel asistan
 
@@ -64,11 +67,15 @@ takvim değişiklikleri gibi riskli işlemler kullanıcı onayı olmadan uygulan
 
 - Yeniden boyutlandırılabilir ve tam ekran olabilen çerçevesiz pencere
 - Türkiye saatine bağlı hareketli kaos temalı arka plan
-- Bekleme, çalışma ve uyarı durumlarına tepki veren masaüstü karakteri
+- Bekleme, çalışma, dinleme, başarı, uyarı ve çevrimdışı durumlarına tepki veren
+  masaüstü karakteri; çoklu sohbetlerde ortak çalışma durumunu izler
 - Mesaj arama, geçmiş, hafıza, ayarlar ve kontrol merkezi pencereleri
+- Her Heko mesajında çevrimdışı seslendirme düğmesi; ayarlanabilir otomatik
+  okuma, Windows sesi, hız ve ses seviyesi
 - Uzun yanıtlarda işlem aşaması, geçen süre ve güvenli durdurma düğmesi
 - İç araç adlarını ve SHA karmalarını kullanıcıdan gizleyen sade sonuç metinleri
 - Windows açılışında otomatik başlatma seçeneği
+- Varsayılan kapalı, Ayarlar'dan açılabilen deneysel ekran farkındalığı
 
 ## Sistem gereksinimleri
 
@@ -122,6 +129,11 @@ OLLAMA_MODEL=qwen3:8b
 OLLAMA_URL=http://127.0.0.1:11434
 ```
 
+Alternatif olarak Heko içindeki **Ayarlar > Yerel Model (Ollama)** ekranından
+kurulu modelleri kontrol edebilir, bir model seçebilir ve bağlantıyı
+sınayabilirsin. Buradan yapılan değişiklik uygulamayı yeniden başlatmadan
+devreye girer ve yalnızca bu bilgisayarda saklanır.
+
 Bağlantıyı kontrol et:
 
 ```powershell
@@ -132,14 +144,33 @@ Invoke-RestMethod http://127.0.0.1:11434/api/tags
 Tamamen yerel kullanım isteniyorsa Windows kullanıcı ortam değişkenlerine
 `OLLAMA_NO_CLOUD=1` eklenebilir.
 
+## Çevrimdışı sesli yanıt
+
+Heko'nun metinden sese özelliği PySide6 `QtTextToSpeech` üzerinden Windows'un
+yerel SAPI/WinRT konuşma motorunu kullanır. Yanıt metni bir ses API'sine
+gönderilmez ve yeni bir Python paketi gerekmez.
+
+- Heko mesajının altındaki `🔊` düğmesi yalnızca o yanıtı okur.
+- Aynı düğmeye veya `■` simgesine basmak okumayı durdurur.
+- **Ayarlar > Ses** bölümünden otomatik okuma, ses, hız ve seviye seçilir.
+- Mikrofon açıldığında devam eden ses otomatik kesilir.
+- Birden fazla sohbet tek motoru paylaşır; sesler üst üste binmez.
+- Kod blokları, bağlantılar ve iç teknik protokoller okunmaz; çok uzun yanıtlar
+  kısa bir sesli bölümden sonra ekrandan devam eder.
+
+**Ayarlar > Ses** ekranında konuşma sesi bulunamadığı yazıyorsa Windows
+**Ayarlar > Saat ve dil > Konuşma** bölümünden Türkçe bir konuşma sesi ekleyip
+Heko'yu yeniden başlat.
+
 ## Google kurulumu
 
 1. Google Cloud Console'da bir OAuth masaüstü istemcisi oluştur.
 2. İndirilen dosyayı proje köküne `credentials.json` adıyla yerleştir.
 3. İlk Gmail veya Takvim kullanımında tarayıcıdan izin ver.
-4. Oluşan erişim bilgileri `memory/token.json` altında yerel olarak saklanır.
+4. Oluşan erişim bilgileri kaynak çalışmada `memory/token.dat` altında, paketli
+   sürümde kullanıcı veri dizininde şifreli olarak saklanır.
 
-`credentials.json` ve `memory/token.json` Git tarafından yok sayılır.
+`credentials.json`, `memory/token.json` ve `memory/token.dat` Git tarafından yok sayılır.
 
 ## Örnek komutlar
 
@@ -185,6 +216,7 @@ Aşağıdaki işlemler iki aşamalı onay gerektirir:
 - Kalıcı kullanıcı hafızasından bilgi silme
 - Proje dosyasına kod yazma
 - Uygulamayı zorla kapatma
+- Tek kare ekran görüntüsü alma ve görsel analiz servisine gönderme
 
 İşlem özeti gösterildikten sonra kullanıcı beş dakika içinde ayrıca onay vermelidir.
 Dosya silme işlemleri Windows Çöp Kutusu üzerinden geri alınabilir biçimde yapılır.
@@ -203,6 +235,12 @@ Ek güvenlik sınırları:
 - Google OAuth yenileme tokenı Windows DPAPI ile kullanıcı hesabına bağlı şifrelenir
 - Kalıcı JSON verileri atomik ve kısıtlı izinli dosya yazımıyla kaydedilir
 - Dış e-posta, dosya ve araç içerikleri model komutu değil, güvenilmeyen veri sayılır
+- Ekran görüntüsü onaydan önce alınmaz; yalnızca bellekte küçültülür, Groq'un
+  `qwen/qwen3.6-27b` görsel modeline gönderilir ve yerel dosya olarak saklanmaz.
+  Bu deneysel özellik varsayılan olarak kapalıdır ve yalnızca **Ayarlar > Sistem**
+  bölümünden açılabilir
+- Metinden sese çıktısı Windows'un yerel konuşma motorunda üretilir; yanıt metni
+  bu amaçla harici bir ses hizmetine gönderilmez
 
 Ayrıntılı tehdit modeli, kalan riskler ve denetim komutları için
 [SECURITY.md](SECURITY.md) belgesine bakın.
@@ -218,32 +256,59 @@ venv\Scripts\python.exe -m unittest discover -s tests -v
 Hızlı sözdizimi kontrolü:
 
 ```powershell
-venv\Scripts\python.exe -m compileall -q main.py ui core services memory tests
+venv\Scripts\python.exe -m compileall -q main.py ui core services memory tests evals utils
 ```
+
+API kullanmadan gerçek kullanıcı cümleleriyle yönlendirme, güvenlik, sunum ve
+kişilik sözleşmesi puanını ölç:
+
+```powershell
+venv\Scripts\python.exe -m evals.run_evals
+```
+
+Seçili Ollama modeliyle dört güvenli kişilik yanıtını da değerlendirmek için:
+
+```powershell
+venv\Scripts\python.exe -m evals.run_evals --live-local
+```
+
+Çevrimdışı toplam puan **Ayarlar > Sistem > Sistem Kontrolü** ekranında da
+gösterilir. Ayrıntılar ve rapor komutları [evals/README.md](evals/README.md)
+dosyasındadır.
 
 Geliştirici güvenlik araçları ve taramalar:
 
 ```powershell
 venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-venv\Scripts\python.exe -m bandit -r core services memory ui utils main.py -x tests
+venv\Scripts\python.exe -X utf8 -m bandit -ll -r core services memory ui utils main.py -x tests
 venv\Scripts\python.exe -m pip_audit --local
 ```
 
 ## Windows EXE oluşturma
 
 ```powershell
-venv\Scripts\python.exe -m PyInstaller --noconfirm HekoAI.spec
+.\scripts\build_release.ps1
 ```
 
+Betik; test, çevrimdışı kalite değerlendirmesi, orta/yüksek güvenlik taraması ve
+temiz PyInstaller derlemesini sırasıyla çalıştırır. Ayrıntılı manuel yayın
+kontrolleri [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) dosyasındadır.
+
 Çıktı `dist/HekoAI.exe` altında oluşur. API anahtarları, Google kimlik bilgileri
-ve kişisel hafıza EXE içine paketlenmez.
+ve kişisel hafıza EXE içine paketlenmez. Paketli sürüm; ayar, sohbet, görev,
+hatırlatıcı ve OAuth verilerini `%LOCALAPPDATA%\HekoAI\data` altında tutar.
+Eski bir sürümde EXE yanında `memory/` kayıtları varsa, boş hedef dizine ilk
+açılışta yalnızca tanınan veri dosyaları güvenli sınırlarla kopyalanır.
+Mikrofon kaydı PCM16 WAV dosyasını standart Python altyapısıyla üretir; dağıtım
+paketinde yalnızca bu iş için ağır SciPy kitaplığının taşınması gerekmez.
 
 ## Proje yapısı
 
 ```text
 assets/       arka planlar ve masaüstü karakter görselleri
 core/         yönlendirme, araç şemaları, güvenlik ve ortak durum
-memory/       çalışma sırasında oluşan yerel kişisel veriler
+evals/        API gerektirmeyen kalite senaryoları ve isteğe bağlı Ollama ölçümü
+memory/       kaynak çalışmada oluşan yerel kişisel veriler
 services/     Groq, Ollama, Google, görev, hava ve sistem servisleri
 tests/        güvenlik ve servis regresyon testleri
 ui/           sohbet, ayarlar, oturum, hafıza ve kontrol pencereleri
@@ -256,13 +321,14 @@ main.py       uygulama giriş noktası ve pencere yöneticisi
 Planlanan sağlamlaştırma çalışmaları [ROADMAP.md](ROADMAP.md) dosyasında tutulur.
 Öne çıkan sonraki adımlar:
 
-- Kullanıcı izinli ekran görüntüsü farkındalığı
-- Ollama model seçiminin Ayarlar ekranına alınması
+- Ölçülen sonuçlara göre model ve prompt kişiselleştirme planı
+- Sürümleme, kurulum paketi ve temiz makinede dağıtım testi
 
 ## Tanılama ve günlükler
 
-Ayarlar içindeki Sistem Kontrolü ekranı gerekli servisleri denetler. Uygulama
-hataları yerel `memory/heko.log` dosyasına yazılır ve Git'e eklenmez.
+Ayarlar içindeki Sistem Kontrolü ekranı gerekli servisleri denetler. Kaynak
+çalışmada hatalar `memory/heko.log` dosyasına, paketli sürümde ise kullanıcı
+veri dizinine yazılır ve Git'e eklenmez.
 
 ## Lisans
 

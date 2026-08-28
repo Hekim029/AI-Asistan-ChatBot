@@ -17,7 +17,6 @@ pywin32-ctypes==0.2.3
 requests==2.33.0
 Send2Trash==1.8.3
 numpy==2.4.3
-scipy==1.17.1
 sounddevice==0.5.5
 psutil==7.2.2
 google-api-python-client==2.192.0
